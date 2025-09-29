@@ -1,5 +1,3 @@
-// Uses the compact search index first (fastest), with index.json fallback.
-
 const API_ROOT = "https://rusherdevelopment.github.io/rusherhack-plugins/api/v1";
 const SEARCH_URL = `${API_ROOT}/search-index.json`;
 const INDEX_URL  = `${API_ROOT}/index.json`;
@@ -12,39 +10,32 @@ const els = {
   status:  document.getElementById("status"),
 };
 
-let DATA = [];           // normalized items for rendering
-let SUGGEST_SRC = [];    // light records for suggestions (name, creator, tags)
-let SUGGEST_INDEX = -1;
+let DATA = [];         // full items for rich rendering
+let SUGGEST_SRC = [];  // light items for suggestions
 
 /* ---------------- utilities ---------------- */
 const debounce = (fn, ms=150) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms);} };
 const escH = s => String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
 const escR = s => s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
 const toks = q => (q||"").toLowerCase().trim().split(/\s+/).filter(Boolean);
+function mark(txt, tokens){ if(!txt||!tokens.length) return escH(txt||""); let out=escH(txt); tokens.sort((a,b)=>b.length-a.length).forEach(x=>{ out=out.replace(new RegExp(`(${escR(x)})`,"ig"),"<mark>$1</mark>"); }); return out; }
+const first = (arr)=>Array.isArray(arr)&&arr.length?arr[0]:"";
 
-function mark(txt, tokens){
-  if(!txt || !tokens.length) return escH(txt||"");
-  let out = escH(txt);
-  tokens.sort((a,b)=>b.length-a.length).forEach(x=>{
-    out = out.replace(new RegExp(`(${escR(x)})`,"ig"),"<mark>$1</mark>");
-  });
-  return out;
+/* Parse "https://github.com/<owner>/<repo>" → {owner, repo}  */
+function parseOwnerRepo(url){
+  if(!url) return {owner:null, repo:null};
+  const m = url.match(/github\.com\/([^\/#?]+)\/([^\/#?]+)(?:$|[\/#?])/i);
+  return m ? {owner:m[1], repo:m[2]} : {owner:null, repo:null};
 }
+const avatarUrl = (owner)=> owner ? `https://avatars.githubusercontent.com/${owner}?s=96` : "";
 
 /* ---------------- normalization ---------------- */
-// For search-index.json (compact)
 function normalizeSearchEntry(e){
-  // expected fields per docs: name, slug, creator, tags, versions
-  return {
-    id: e.slug || e.id || e.name || "",
-    name: e.name || "Untitled",
-    creator: e.creator || "",
-    tags: Array.isArray(e.tags) ? e.tags : [],
-    versions: Array.isArray(e.versions) ? e.versions : [],
-  };
+  return { id:e.slug||e.id||e.name||"", name:e.name||"Untitled", creator:e.creator||"", tags:Array.isArray(e.tags)?e.tags:[], versions:Array.isArray(e.versions)?e.versions:[] };
 }
-// For index.json (full items)
 function normalizeFullItem(raw){
+  const authors = Array.isArray(raw.authors) ? raw.authors : (raw.author ? [String(raw.author)] : []);
+  const { owner } = parseOwnerRepo(raw.repo || raw.repository || raw.url || "");
   return {
     id: raw.id || raw.slug || raw.name || "",
     name: raw.name || "Untitled",
@@ -53,11 +44,12 @@ function normalizeFullItem(raw){
     homepage: raw.homepage || "",
     jar: raw.jar || raw.download_url || raw.download || "",
     type: (raw.type || raw.kind || "plugin").toLowerCase(),
-    authors: Array.isArray(raw.authors) ? raw.authors : (raw.author ? [String(raw.author)] : []),
+    authors,
     tags: Array.isArray(raw.tags) ? raw.tags : [],
     mc: Array.isArray(raw.mc_versions) ? raw.mc_versions : (raw.mc ? [String(raw.mc)] : []),
     updated: raw.updated || raw.last_updated || raw.release_date || "",
     version: raw.version || raw.latest_version || "",
+    owner: owner || (authors.length ? authors[0] : null), // fallback if repo missing
   };
 }
 
@@ -69,46 +61,33 @@ async function fetchJSON(url){
 }
 
 async function loadData(){
-  // 1) Try compact search-index.json for suggestions + fast search
+  // suggestions (compact)
   try{
     const compact = await fetchJSON(SEARCH_URL);
-    if (Array.isArray(compact) && compact.length){
+    if(Array.isArray(compact) && compact.length){
       SUGGEST_SRC = compact.map(normalizeSearchEntry);
-      els.status.textContent = `Loaded ${SUGGEST_SRC.length} items`;
-    } else {
-      throw new Error("search-index.json not an array");
+      els.status.textContent = `Loaded ${compact.length} items`;
     }
-  }catch(e){
-    console.warn("[RusherSearch] search-index.json failed:", e);
-    els.status.textContent = "Search index not available; trying full index…";
-  }
+  }catch(e){ console.warn("[RusherSearch] search-index failed:", e); }
 
-  // 2) Always try to fetch the full index for rendering richness.
+  // full items (rich)
   try{
     const full = await fetchJSON(INDEX_URL);
-    const flat = Array.isArray(full) ? full : (
-      full && typeof full === "object"
-        ? Object.values(full).filter(Array.isArray).flat()
-        : []
-    );
+    const flat = Array.isArray(full) ? full :
+      (full && typeof full==="object" ? Object.values(full).filter(Array.isArray).flat() : []);
     DATA = flat.map(normalizeFullItem);
-    if (!SUGGEST_SRC.length){
-      // fallback: build a lightweight source from full data
-      SUGGEST_SRC = DATA.map(d => ({
-        id: d.id, name: d.name, creator: (d.authors && d.authors[0]) || "", tags: d.tags || []
-      }));
+    if(!SUGGEST_SRC.length){
+      SUGGEST_SRC = DATA.map(d => ({ id:d.id, name:d.name, creator:first(d.authors), tags:d.tags||[], versions:d.mc||[] }));
     }
     els.status.textContent = `Loaded ${DATA.length} items`;
   }catch(e){
     console.error("[RusherSearch] index.json failed:", e);
-    if (!SUGGEST_SRC.length){
-      els.status.textContent = "Failed to load API data.";
-    }
+    if(!SUGGEST_SRC.length) els.status.textContent = "Failed to load API data.";
   }
 }
 
-/* ---------------- search ---------------- */
-function scoreFull(item, tokens){
+/* ---------------- search & render ---------------- */
+function score(item, tokens){
   if(!tokens.length) return 0;
   const name=item.name.toLowerCase(), desc=(item.description||"").toLowerCase(),
         authors=(item.authors||[]).join(" ").toLowerCase(),
@@ -126,27 +105,42 @@ function scoreFull(item, tokens){
 function render(items, tokens){
   els.results.innerHTML = "";
   els.results.setAttribute("aria-busy","false");
-
   if(!items.length){ els.empty.style.display=""; return; }
   els.empty.style.display="none";
 
   const frag=document.createDocumentFragment();
   for(const it of items){
+    const owner = it.owner || first(it.authors);
+    const avatar = avatarUrl(owner);
+    const tagChips = (it.tags||[]).slice(0,5).map(t=>`<span class="chip">${escH(t)}</span>`).join("");
+    const verChips = (it.mc||[]).slice(0,4).map(v=>`<span class="chip">${escH(v)}</span>`).join("");
+
     const li=document.createElement("li");
     li.className="card";
     li.innerHTML = `
-      <h3>${mark(it.name,tokens)}</h3>
-      <div class="meta">
-        ${it.type ? `<span class="badge">${escH(it.type)}</span>` : ""}
-        ${it.version ? `<span class="badge">v${escH(it.version)}</span>` : ""}
-        ${(it.authors && it.authors.length) ? `<span class="badge">${escH(it.authors.join(", "))}</span>` : ""}
-        ${(it.mc && it.mc.length) ? `<span class="badge">${escH(it.mc.join(", "))}</span>` : ""}
-      </div>
-      <p class="desc">${it.description ? mark(it.description,tokens) : "<span class='small'>No description</span>"}</p>
-      <div class="links">
-        ${it.repo ? `<a class="button" href="${it.repo}" target="_blank" rel="noopener">Repo</a>` : ""}
-        ${it.jar ? `<a class="button" href="${it.jar}" target="_blank" rel="noopener">Download JAR</a>` : ""}
-        ${it.homepage ? `<a class="button" href="${it.homepage}" target="_blank" rel="noopener">Homepage</a>` : ""}
+      <div class="row">
+        ${avatar ? `<img class="avatar" loading="lazy" src="${avatar}" alt="${escH(owner || "creator")}" referrerpolicy="no-referrer" onerror="this.style.display='none'">` : `<div class="avatar" style="display:none"></div>`}
+        <div>
+          <h3>${mark(it.name,tokens)}</h3>
+          <div class="creator">${owner ? escH(owner) : (it.authors?.length ? escH(it.authors.join(", ")) : "Unknown creator")}</div>
+
+          <div class="meta">
+            ${it.type ? `<span class="badge">${escH(it.type)}</span>` : ""}
+            ${it.version ? `<span class="badge">v${escH(it.version)}</span>` : ""}
+            ${it.updated ? `<span class="badge" title="Last updated">${escH(it.updated)}</span>` : ""}
+          </div>
+
+          <p class="desc">${it.description ? mark(it.description,tokens) : "<span class='small'>No description</span>"}</p>
+
+          ${tagChips ? `<div class="tags">${tagChips}</div>` : ""}
+          ${verChips ? `<div class="versions">${verChips}</div>` : ""}
+
+          <div class="links">
+            ${it.repo ? `<a class="button" href="${it.repo}" target="_blank" rel="noopener">Repo</a>` : ""}
+            ${it.jar ? `<a class="button" href="${it.jar}" target="_blank" rel="noopener">Download JAR</a>` : ""}
+            ${it.homepage ? `<a class="button" href="${it.homepage}" target="_blank" rel="noopener">Homepage</a>` : ""}
+          </div>
+        </div>
       </div>
     `;
     frag.appendChild(li);
@@ -157,17 +151,14 @@ function render(items, tokens){
 function runSearch(){
   const q = els.search.value.trim();
   const tokens = toks(q);
+  if(!tokens.length){ render([], []); return; }
 
-  // nothing typed -> keep empty state
-  if (!tokens.length){ render([], []); return; }
-
-  // If full data is available, use it for better ranking/display
   const source = DATA.length ? DATA : SUGGEST_SRC.map(s => ({
-    name: s.name, description:"", authors: s.creator?[s.creator]:[], tags: s.tags||[], repo:"", homepage:"", jar:"", type:"", mc:[], version:""
+    name:s.name, description:"", authors:s.creator?[s.creator]:[], tags:s.tags||[], mc:s.versions||[], repo:"", homepage:"", jar:"", type:"", version:"", updated:"", owner:s.creator||null
   }));
 
   const ranked = source
-    .map(item => ({ item, score: scoreFull(item, tokens) }))
+    .map(item => ({ item, score: score(item, tokens) }))
     .filter(x => x.score > 0)
     .sort((a,b)=> b.score - a.score || a.item.name.localeCompare(b.item.name))
     .slice(0, 200)
@@ -178,11 +169,10 @@ function runSearch(){
 
 /* ---------------- suggestions ---------------- */
 let SUGGEST_INDEX_ACTIVE = -1;
-
 function buildSuggestions(q){
   const term = q.toLowerCase();
   if(!term || !SUGGEST_SRC.length){
-    els.suggest.classList.remove("show"); els.suggest.innerHTML=""; SUGGEST_INDEX_ACTIVE=-1; return;
+    els.suggest?.classList.remove("show"); if(els.suggest) els.suggest.innerHTML=""; SUGGEST_INDEX_ACTIVE=-1; return;
   }
   const starts=[], contains=[];
   for(const it of SUGGEST_SRC){
@@ -200,7 +190,6 @@ function buildSuggestions(q){
   SUGGEST_INDEX_ACTIVE = list.length ? 0 : -1;
   els.suggest.classList.toggle("show", list.length>0);
 }
-
 function commitSuggestion(idx){
   const items = Array.from(els.suggest.querySelectorAll("li"));
   if(idx<0 || idx>=items.length) return;
@@ -215,17 +204,10 @@ async function init(){
   els.status.textContent = "Loading…";
   await loadData();
   els.results.setAttribute("aria-busy","false");
-  if (DATA.length || SUGGEST_SRC.length){
-    els.status.textContent = `Loaded ${DATA.length || SUGGEST_SRC.length} items`;
-  } else {
-    els.status.textContent = "Failed to load API data.";
-  }
+  els.status.textContent = (DATA.length || SUGGEST_SRC.length) ? `Loaded ${DATA.length || SUGGEST_SRC.length} items` : "Failed to load API data.";
 }
 
-const debouncedSearch = debounce(()=>{
-  buildSuggestions(els.search.value);
-  runSearch();
-},120);
+const debouncedSearch = debounce(()=>{ buildSuggestions(els.search.value); runSearch(); },120);
 
 els.search.addEventListener("input", debouncedSearch);
 els.search.addEventListener("keydown",(e)=>{
@@ -240,8 +222,6 @@ els.suggest.addEventListener("mousedown",(e)=>{
   const idx = Array.from(els.suggest.children).indexOf(li);
   commitSuggestion(idx);
 });
-document.addEventListener("click",(e)=>{
-  if(!e.target.closest(".search-wrap")) els.suggest.classList.remove("show");
-});
+document.addEventListener("click",(e)=>{ if(!e.target.closest(".search-wrap")) els.suggest.classList.remove("show"); });
 
 init();
