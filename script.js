@@ -29,7 +29,36 @@ function parseOwnerRepo(url){
   const m = url.match(/github\.com\/([^\/#?]+)\/([^\/#?]+)(?:$|[\/#?])/i);
   return m ? {owner:m[1], repo:m[2]} : {owner:null, repo:null};
 }
-const avatarFromOwner = (owner)=> owner ? `https://avatars.githubusercontent.com/${owner}?s=96` : "";
+
+// Base avatar URL (no fixed size)
+const avatarFromOwner = (owner)=> owner ? `https://avatars.githubusercontent.com/${owner}` : "";
+
+/** Normalize any GitHub avatar URL to avatars.githubusercontent.com/<user>
+ * and return crisp sources for 1x/2x/3x.
+ */
+function buildAvatarSources(rawUrl, ownerLike){
+  const user = (ownerLike || "")
+    .replace(/^https?:\/\/github\.com\//i, "")
+    .replace(/\.png.*$/i, "")
+    .replace(/[^A-Za-z0-9-]/g, "");
+
+  let base = "";
+  if (user) {
+    base = `https://avatars.githubusercontent.com/${user}`;
+  } else if (rawUrl) {
+    const m = rawUrl.match(/github\.com\/([^\/?#]+)\.png/i);
+    if (m) base = `https://avatars.githubusercontent.com/${m[1]}`;
+    else base = rawUrl.replace("github.com","avatars.githubusercontent.com").split("?")[0];
+  } else {
+    return { src: "", srcset: "" };
+  }
+
+  const s1 = 128, s2 = 256, s3 = 384;  // for a ~64px element on HiDPI
+  return {
+    src:    `${base}?s=${s1}`,
+    srcset: `${base}?s=${s1} 1x, ${base}?s=${s2} 2x, ${base}?s=${s3} 3x`,
+  };
+}
 
 /* ------------- normalization ------------- */
 function normalizeSearchEntry(e){
@@ -82,7 +111,10 @@ function normalizeFullItem(raw){
     authors,
     creator: creatorName,
     creatorUrl: cObj?.url || (creatorName ? `https://github.com/${creatorName}` : ""),
-    avatar: cObj?.avatar || avatarFromOwner(owner),
+    // strip tiny "?size=20" and move to avatars CDN; sizes handled via srcset
+    avatar: cObj?.avatar
+      ? cObj.avatar.replace(/(\?|&)size=\d+/i, "").replace("github.com","avatars.githubusercontent.com")
+      : avatarFromOwner(owner),
     tags: Array.isArray(raw.tags) ? raw.tags : [],
     mc,
     updated: raw.updated || raw.last_updated || raw.release_date || "",
@@ -163,10 +195,12 @@ function supplementFromSuggest(item){
   };
 }
 
-function avatarBlock(imgUrl, fallbackText){
+function avatarBlock(imgUrl, fallbackText, ownerLike){
   const initials = (fallbackText || "??").slice(0,2).toUpperCase();
-  if (!imgUrl) return `<div class="avatar fallback">${escH(initials)}</div>`;
-  return `<img class="avatar" loading="lazy" src="${imgUrl}" alt="${escH(fallbackText||'creator')}"
+  const { src, srcset } = buildAvatarSources(imgUrl, ownerLike);
+  if (!src) return `<div class="avatar fallback">${escH(initials)}</div>`;
+  return `<img class="avatar" loading="lazy" src="${src}" srcset="${srcset}" sizes="64px"
+            alt="${escH(fallbackText||'creator')}"
             onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'avatar fallback',textContent:'${escH(initials)}'}))">`;
 }
 
@@ -181,7 +215,7 @@ function render(items, tokens){
     it = supplementFromSuggest(it);
 
     const creator = it.creator || first(it.authors) || "";
-    const avatarHTML = avatarBlock(it.avatar, creator || it.owner || it.name);
+    const avatarHTML = avatarBlock(it.avatar, creator || it.owner || it.name, it.owner || creator);
     const creatorLine = creator
       ? (it.creatorUrl ? `<a class="creator" href="${it.creatorUrl}" target="_blank" rel="noopener">${escH(creator)}</a>`
                        : `<div class="creator">${escH(creator)}</div>`)
@@ -200,7 +234,7 @@ function render(items, tokens){
           ${creatorLine}
           <div class="meta">
             ${it.type ? `<span class="badge">${escH(it.type)}</span>` : ""}
-            ${it.version ? `<span class="badge">${escH(it.version)}</span>` : ""}
+            ${it.version ? `<span class="badge">v${escH(it.version)}</span>` : ""}
             ${it.updated ? `<span class="badge" title="Last updated">${escH(it.updated)}</span>` : ""}
           </div>
 
