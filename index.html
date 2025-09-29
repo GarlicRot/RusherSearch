@@ -12,9 +12,11 @@
     <h1>🔍 RusherHack Plugin Search</h1>
     <p class="sub">Type to search plugins & themes from the public API.</p>
 
+    <div id="status" class="status small" aria-live="polite">Loading…</div>
+
     <div class="controls">
       <div class="search-wrap">
-        <input id="search" type="search" placeholder="Search by name, description, author, tag…" autocomplete="off" />
+        <input id="search" type="search" placeholder="Search by name, creator, or tag…" autocomplete="off" />
         <ul id="suggest" class="suggest" role="listbox" aria-label="Suggestions"></ul>
       </div>
     </div>
