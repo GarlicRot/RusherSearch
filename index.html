@@ -1,17 +1,36 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
   <title>RusherHack Plugin Search</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://rusherdevelopment.github.io" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="container">
+  <header class="wrap">
     <h1>🔍 RusherHack Plugin Search</h1>
-    <input id="search" type="text" placeholder="Search plugins or themes..." />
-    <ul id="results"></ul>
-  </div>
+    <p class="sub">Type to search plugins & themes from the public API.</p>
+    <div class="controls">
+      <input id="search" type="search" placeholder="Search by name, description, author, tag..." autocomplete="off" />
+      <div class="filters" role="group" aria-label="Type filter">
+        <button class="chip active" data-filter="all">All</button>
+        <button class="chip" data-filter="plugin">Plugins</button>
+        <button class="chip" data-filter="theme">Themes</button>
+        <button class="chip" data-filter="core">Core</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <ul id="results" class="grid" aria-live="polite" aria-busy="true"></ul>
+    <div id="empty" class="empty">Start typing to search the catalog…</div>
+  </main>
+
+  <footer class="wrap foot">
+    <small>Powered by the <a href="https://rusherdevelopment.github.io/rusherhack-plugins/api/v1/" target="_blank" rel="noopener">RusherHacks Plugin/Theme API</a></small>
+  </footer>
+
   <script src="script.js"></script>
 </body>
 </html>
