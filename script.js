@@ -29,7 +29,7 @@ function parseOwnerRepo(url){
   const m = url.match(/github\.com\/([^\/#?]+)\/([^\/#?]+)(?:$|[\/#?])/i);
   return m ? {owner:m[1], repo:m[2]} : {owner:null, repo:null};
 }
-const avatarUrl = (owner)=> owner ? `https://avatars.githubusercontent.com/${owner}?s=96` : "";
+const avatarFromOwner = (owner)=> owner ? `https://avatars.githubusercontent.com/${owner}?s=96` : "";
 
 /* ------------- normalization ------------- */
 function normalizeSearchEntry(e){
@@ -44,29 +44,50 @@ function normalizeSearchEntry(e){
   SUGGEST_BY_NAME.set(rec.name.toLowerCase(), rec);
   return rec;
 }
+
+// Handles the v1 API item shape (creator object, repo owner/repo, jar_url, mc_versions string, etc.)
 function normalizeFullItem(raw){
+  // creator: support object or string
+  const cObj = (raw.creator && typeof raw.creator === "object") ? raw.creator : null;
   const authors = Array.isArray(raw.authors) ? raw.authors
                  : raw.author ? [String(raw.author)]
                  : [];
-  const creator = raw.creator || first(authors) || "";
-  const { owner } = parseOwnerRepo(raw.repo || raw.repository || raw.url || "");
+  const creatorName = cObj?.name || raw.creator_slug || (typeof raw.creator === "string" ? raw.creator : "") || first(authors) || "";
+
+  // owner/repo bits
+  const owner = raw.owner || (raw.repo && String(raw.repo).includes("/") ? String(raw.repo).split("/")[0] : "") || creatorName || "";
+  const repoName = raw.repo_name || (raw.repo && String(raw.repo).includes("/") ? String(raw.repo).split("/")[1] : "") || "";
+
+  // repo URL preference: explicit repo_url > full github URL in repo > build from owner/repoName
+  const repoUrl =
+    raw.repo_url ? raw.repo_url :
+    (raw.repo && String(raw.repo).startsWith("http")) ? raw.repo :
+    (owner && repoName ? `https://github.com/${owner}/${repoName}` : (raw.url || raw.repository || ""));
+
+  // versions: array or comma/space-separated string; fall back to canonical
+  const mc = Array.isArray(raw.mc_versions) ? raw.mc_versions
+           : raw.mc_versions ? String(raw.mc_versions).split(/[,\s]+/).filter(Boolean)
+           : Array.isArray(raw.versions_canonical) ? raw.versions_canonical
+           : Array.isArray(raw.versions) ? raw.versions
+           : (raw.mc ? [String(raw.mc)] : []);
+
   return {
-    id: raw.id || raw.slug || raw.name || "",
-    name: raw.name || "Untitled",
+    id: raw.id || raw.slug || raw.name || repoUrl || `${owner}/${repoName}` || "",
+    name: raw.name || repoName || "Untitled",
     description: raw.description || raw.summary || raw.desc || "",
-    repo: raw.repo || raw.repository || raw.url || "",
+    repo: repoUrl,
     homepage: raw.homepage || "",
-    jar: raw.jar || raw.download_url || raw.download || "",
-    type: (raw.type || raw.kind || "plugin").toLowerCase(),
+    jar: raw.jar || raw.jar_url || raw.download_url || raw.download || "",
+    type: (raw.type || raw.kind || (raw.is_core ? "core" : "plugin")).toLowerCase(),
     authors,
-    creator,          // <- NEW
+    creator: creatorName,
+    creatorUrl: cObj?.url || (creatorName ? `https://github.com/${creatorName}` : ""),
+    avatar: cObj?.avatar || avatarFromOwner(owner),
     tags: Array.isArray(raw.tags) ? raw.tags : [],
-    mc: Array.isArray(raw.mc_versions) ? raw.mc_versions
-        : Array.isArray(raw.versions) ? raw.versions
-        : (raw.mc ? [String(raw.mc)] : []),
+    mc,
     updated: raw.updated || raw.last_updated || raw.release_date || "",
-    version: raw.version || raw.latest_version || "",
-    owner: owner || creator || null, // prefer repo owner, else creator
+    version: raw.version || raw.latest_release_tag || raw.latest_version || "",
+    owner: owner || null,
   };
 }
 
@@ -129,7 +150,7 @@ function score(item, tokens){
 }
 
 function supplementFromSuggest(item){
-  // Use search-index to fill gaps
+  // Use search-index to fill gaps (creator, tags, versions)
   const key = (item.id||"").toLowerCase();
   const rec = SUGGEST_BY_ID.get(key) || SUGGEST_BY_NAME.get((item.name||"").toLowerCase());
   if(!rec) return item;
@@ -142,11 +163,10 @@ function supplementFromSuggest(item){
   };
 }
 
-function avatarBlock(ownerLike){
-  const initials = (ownerLike||"??").slice(0,2).toUpperCase();
-  const src = avatarUrl(ownerLike);
-  if(!src) return `<div class="avatar fallback">${escH(initials)}</div>`;
-  return `<img class="avatar" loading="lazy" src="${src}" alt="${escH(ownerLike)}"
+function avatarBlock(imgUrl, fallbackText){
+  const initials = (fallbackText || "??").slice(0,2).toUpperCase();
+  if (!imgUrl) return `<div class="avatar fallback">${escH(initials)}</div>`;
+  return `<img class="avatar" loading="lazy" src="${imgUrl}" alt="${escH(fallbackText||'creator')}"
             onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'avatar fallback',textContent:'${escH(initials)}'}))">`;
 }
 
@@ -161,7 +181,12 @@ function render(items, tokens){
     it = supplementFromSuggest(it);
 
     const creator = it.creator || first(it.authors) || "";
-    const ownerForAvatar = parseOwnerRepo(it.repo).owner || creator || null;
+    const avatarHTML = avatarBlock(it.avatar, creator || it.owner || it.name);
+    const creatorLine = creator
+      ? (it.creatorUrl ? `<a class="creator" href="${it.creatorUrl}" target="_blank" rel="noopener">${escH(creator)}</a>`
+                       : `<div class="creator">${escH(creator)}</div>`)
+      : "";
+
     const tagChips = (it.tags||[]).slice(0,5).map(t=>`<span class="chip">${escH(t)}</span>`).join("");
     const verChips = (it.mc||[]).slice(0,4).map(v=>`<span class="chip">${escH(v)}</span>`).join("");
 
@@ -169,11 +194,10 @@ function render(items, tokens){
     li.className="card";
     li.innerHTML = `
       <div class="row">
-        ${avatarBlock(ownerForAvatar)}
+        ${avatarHTML}
         <div>
           <h3>${mark(it.name,tokens)}</h3>
-          ${creator ? `<div class="creator">${escH(creator)}</div>` : ""}
-
+          ${creatorLine}
           <div class="meta">
             ${it.type ? `<span class="badge">${escH(it.type)}</span>` : ""}
             ${it.version ? `<span class="badge">v${escH(it.version)}</span>` : ""}
