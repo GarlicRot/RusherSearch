@@ -1,0 +1,43 @@
+body {
+  font-family: system-ui, sans-serif;
+  background: #0a0b10;
+  color: #fff;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.container {
+  max-width: 600px;
+  width: 100%;
+  padding: 2rem;
+  text-align: center;
+}
+
+input {
+  width: 100%;
+  padding: 0.8rem;
+  font-size: 1rem;
+  margin-bottom: 1.5rem;
+  border-radius: 6px;
+  border: none;
+}
+
+ul {
+  list-style: none;
+  padding: 0;
+}
+
+li {
+  background: #1a1f29;
+  margin: 0.5rem 0;
+  padding: 1rem;
+  border-radius: 6px;
+  text-align: left;
+}
+
+a {
+  color: #4db8ff;
+  text-decoration: none;
+}
