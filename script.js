@@ -10,10 +10,12 @@ const els = {
   status:  document.getElementById("status"),
 };
 
-let DATA = [];         // full items for rich rendering
-let SUGGEST_SRC = [];  // light items for suggestions
+let DATA = [];         // full items (rich)
+let SUGGEST_SRC = [];  // light items (for suggestions)
+let SUGGEST_BY_ID = new Map();
+let SUGGEST_BY_NAME = new Map();
 
-/* ---------------- utilities ---------------- */
+/* ------------- utils ------------- */
 const debounce = (fn, ms=150) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms);} };
 const escH = s => String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
 const escR = s => s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
@@ -21,7 +23,7 @@ const toks = q => (q||"").toLowerCase().trim().split(/\s+/).filter(Boolean);
 function mark(txt, tokens){ if(!txt||!tokens.length) return escH(txt||""); let out=escH(txt); tokens.sort((a,b)=>b.length-a.length).forEach(x=>{ out=out.replace(new RegExp(`(${escR(x)})`,"ig"),"<mark>$1</mark>"); }); return out; }
 const first = (arr)=>Array.isArray(arr)&&arr.length?arr[0]:"";
 
-/* Parse "https://github.com/<owner>/<repo>" → {owner, repo}  */
+/* Parse "https://github.com/<owner>/<repo>" → {owner, repo} */
 function parseOwnerRepo(url){
   if(!url) return {owner:null, repo:null};
   const m = url.match(/github\.com\/([^\/#?]+)\/([^\/#?]+)(?:$|[\/#?])/i);
@@ -29,37 +31,51 @@ function parseOwnerRepo(url){
 }
 const avatarUrl = (owner)=> owner ? `https://avatars.githubusercontent.com/${owner}?s=96` : "";
 
-/* ---------------- normalization ---------------- */
+/* ------------- normalization ------------- */
 function normalizeSearchEntry(e){
-  return { id:e.slug||e.id||e.name||"", name:e.name||"Untitled", creator:e.creator||"", tags:Array.isArray(e.tags)?e.tags:[], versions:Array.isArray(e.versions)?e.versions:[] };
+  const rec = {
+    id: e.slug || e.id || e.name || "",
+    name: e.name || "Untitled",
+    creator: e.creator || "",
+    tags: Array.isArray(e.tags)?e.tags:[],
+    versions: Array.isArray(e.versions)?e.versions:[]
+  };
+  if(rec.id) SUGGEST_BY_ID.set(rec.id.toLowerCase(), rec);
+  SUGGEST_BY_NAME.set(rec.name.toLowerCase(), rec);
+  return rec;
 }
 function normalizeFullItem(raw){
-  const authors = Array.isArray(raw.authors) ? raw.authors : (raw.author ? [String(raw.author)] : []);
+  const authors = Array.isArray(raw.authors) ? raw.authors
+                 : raw.author ? [String(raw.author)]
+                 : [];
+  const creator = raw.creator || first(authors) || "";
   const { owner } = parseOwnerRepo(raw.repo || raw.repository || raw.url || "");
   return {
     id: raw.id || raw.slug || raw.name || "",
     name: raw.name || "Untitled",
-    description: raw.description || raw.summary || "",
+    description: raw.description || raw.summary || raw.desc || "",
     repo: raw.repo || raw.repository || raw.url || "",
     homepage: raw.homepage || "",
     jar: raw.jar || raw.download_url || raw.download || "",
     type: (raw.type || raw.kind || "plugin").toLowerCase(),
     authors,
+    creator,          // <- NEW
     tags: Array.isArray(raw.tags) ? raw.tags : [],
-    mc: Array.isArray(raw.mc_versions) ? raw.mc_versions : (raw.mc ? [String(raw.mc)] : []),
+    mc: Array.isArray(raw.mc_versions) ? raw.mc_versions
+        : Array.isArray(raw.versions) ? raw.versions
+        : (raw.mc ? [String(raw.mc)] : []),
     updated: raw.updated || raw.last_updated || raw.release_date || "",
     version: raw.version || raw.latest_version || "",
-    owner: owner || (authors.length ? authors[0] : null), // fallback if repo missing
+    owner: owner || creator || null, // prefer repo owner, else creator
   };
 }
 
-/* ---------------- data load ---------------- */
+/* ------------- data load ------------- */
 async function fetchJSON(url){
   const res = await fetch(url, { cache: "no-store" });
   if(!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   return res.json();
 }
-
 async function loadData(){
   // suggestions (compact)
   try{
@@ -76,8 +92,17 @@ async function loadData(){
     const flat = Array.isArray(full) ? full :
       (full && typeof full==="object" ? Object.values(full).filter(Array.isArray).flat() : []);
     DATA = flat.map(normalizeFullItem);
+
+    // build suggestions from full when needed
     if(!SUGGEST_SRC.length){
-      SUGGEST_SRC = DATA.map(d => ({ id:d.id, name:d.name, creator:first(d.authors), tags:d.tags||[], versions:d.mc||[] }));
+      SUGGEST_SRC = DATA.map(d => ({
+        id:d.id, name:d.name, creator:d.creator||first(d.authors)||"", tags:d.tags||[], versions:d.mc||[]
+      }));
+      SUGGEST_BY_ID.clear(); SUGGEST_BY_NAME.clear();
+      SUGGEST_SRC.forEach(rec=>{
+        if(rec.id) SUGGEST_BY_ID.set(rec.id.toLowerCase(),rec);
+        SUGGEST_BY_NAME.set(rec.name.toLowerCase(),rec);
+      });
     }
     els.status.textContent = `Loaded ${DATA.length} items`;
   }catch(e){
@@ -86,20 +111,43 @@ async function loadData(){
   }
 }
 
-/* ---------------- search & render ---------------- */
+/* ------------- search & render ------------- */
 function score(item, tokens){
   if(!tokens.length) return 0;
   const name=item.name.toLowerCase(), desc=(item.description||"").toLowerCase(),
         authors=(item.authors||[]).join(" ").toLowerCase(),
         tags=(item.tags||[]).join(" ").toLowerCase(),
-        repo=(item.repo||"").toLowerCase();
+        repo=(item.repo||"").toLowerCase(),
+        creator=(item.creator||"").toLowerCase();
   let s=0;
   for(const t of tokens){
     if(name===t) s+=30; else if(name.startsWith(t)) s+=20; else if(name.includes(t)) s+=14;
-    if(desc.includes(t)) s+=6; if(authors.includes(t)) s+=5; if(tags.includes(t)) s+=5; if(repo.includes(t)) s+=4;
+    if(desc.includes(t)) s+=6; if(authors.includes(t)) s+=5; if(tags.includes(t)) s+=5; if(repo.includes(t)) s+=4; if(creator.includes(t)) s+=6;
   }
   if(s>0 && tokens.length>1) s+=3;
   return s;
+}
+
+function supplementFromSuggest(item){
+  // Use search-index to fill gaps
+  const key = (item.id||"").toLowerCase();
+  const rec = SUGGEST_BY_ID.get(key) || SUGGEST_BY_NAME.get((item.name||"").toLowerCase());
+  if(!rec) return item;
+  return {
+    ...item,
+    creator: item.creator || rec.creator || "",
+    owner: item.owner || rec.creator || item.creator || null,
+    tags: (item.tags && item.tags.length) ? item.tags : (rec.tags || []),
+    mc: (item.mc && item.mc.length) ? item.mc : (rec.versions || []),
+  };
+}
+
+function avatarBlock(ownerLike){
+  const initials = (ownerLike||"??").slice(0,2).toUpperCase();
+  const src = avatarUrl(ownerLike);
+  if(!src) return `<div class="avatar fallback">${escH(initials)}</div>`;
+  return `<img class="avatar" loading="lazy" src="${src}" alt="${escH(ownerLike)}"
+            onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'avatar fallback',textContent:'${escH(initials)}'}))">`;
 }
 
 function render(items, tokens){
@@ -109,9 +157,11 @@ function render(items, tokens){
   els.empty.style.display="none";
 
   const frag=document.createDocumentFragment();
-  for(const it of items){
-    const owner = it.owner || first(it.authors);
-    const avatar = avatarUrl(owner);
+  for(let it of items){
+    it = supplementFromSuggest(it);
+
+    const creator = it.creator || first(it.authors) || "";
+    const ownerForAvatar = parseOwnerRepo(it.repo).owner || creator || null;
     const tagChips = (it.tags||[]).slice(0,5).map(t=>`<span class="chip">${escH(t)}</span>`).join("");
     const verChips = (it.mc||[]).slice(0,4).map(v=>`<span class="chip">${escH(v)}</span>`).join("");
 
@@ -119,10 +169,10 @@ function render(items, tokens){
     li.className="card";
     li.innerHTML = `
       <div class="row">
-        ${avatar ? `<img class="avatar" loading="lazy" src="${avatar}" alt="${escH(owner || "creator")}" referrerpolicy="no-referrer" onerror="this.style.display='none'">` : `<div class="avatar" style="display:none"></div>`}
+        ${avatarBlock(ownerForAvatar)}
         <div>
           <h3>${mark(it.name,tokens)}</h3>
-          <div class="creator">${owner ? escH(owner) : (it.authors?.length ? escH(it.authors.join(", ")) : "Unknown creator")}</div>
+          ${creator ? `<div class="creator">${escH(creator)}</div>` : ""}
 
           <div class="meta">
             ${it.type ? `<span class="badge">${escH(it.type)}</span>` : ""}
@@ -154,7 +204,8 @@ function runSearch(){
   if(!tokens.length){ render([], []); return; }
 
   const source = DATA.length ? DATA : SUGGEST_SRC.map(s => ({
-    name:s.name, description:"", authors:s.creator?[s.creator]:[], tags:s.tags||[], mc:s.versions||[], repo:"", homepage:"", jar:"", type:"", version:"", updated:"", owner:s.creator||null
+    id:s.id, name:s.name, description:"", authors:s.creator?[s.creator]:[], creator:s.creator||"",
+    tags:s.tags||[], mc:s.versions||[], repo:"", homepage:"", jar:"", type:"", version:"", updated:"", owner:s.creator||null
   }));
 
   const ranked = source
@@ -167,7 +218,7 @@ function runSearch(){
   render(ranked, tokens);
 }
 
-/* ---------------- suggestions ---------------- */
+/* ------------- suggestions ------------- */
 let SUGGEST_INDEX_ACTIVE = -1;
 function buildSuggestions(q){
   const term = q.toLowerCase();
@@ -199,7 +250,7 @@ function commitSuggestion(idx){
   runSearch();
 }
 
-/* ---------------- init & events ---------------- */
+/* ------------- init & events ------------- */
 async function init(){
   els.status.textContent = "Loading…";
   await loadData();
