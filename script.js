@@ -234,7 +234,7 @@ function render(items, tokens){
           ${creatorLine}
           <div class="meta">
             ${it.type ? `<span class="badge">${escH(it.type)}</span>` : ""}
-            ${it.version ? `<span class="badge">v${escH(it.version)}</span>` : ""}
+            ${it.version ? `<span class="badge">${escH(it.version)}</span>` : ""}
             ${it.updated ? `<span class="badge" title="Last updated">${escH(it.updated)}</span>` : ""}
           </div>
 
