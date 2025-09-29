@@ -1,28 +1,21 @@
 const API_URL = "https://rusherdevelopment.github.io/rusherhack-plugins/api/v1/index.json";
 
 const els = {
-  search: document.getElementById("search"),
+  search:  document.getElementById("search"),
+  suggest: document.getElementById("suggest"),
   results: document.getElementById("results"),
-  empty: document.getElementById("empty"),
-  chips: Array.from(document.querySelectorAll(".chip")),
+  empty:   document.getElementById("empty"),
 };
 
 let DATA = [];
-let ACTIVE_FILTER = "all";
+let SUGGEST_INDEX = -1;
 
-/* ---------- utilities ---------- */
+/* ---------- utils ---------- */
+const debounce = (fn, ms=150) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms);} };
+const normalizeArray = v => !v ? [] : Array.isArray(v) ? v.filter(Boolean).map(String) : String(v).split(/[,\s]+/).filter(Boolean);
 
-const debounce = (fn, ms = 150) => {
-  let t;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  };
-};
-
-function normalizeItem(raw) {
-  // Be defensive about field names; API may evolve.
-  const type = (raw.type || raw.kind || "").toLowerCase(); // "plugin" | "theme" | "core"
+function normalizeItem(raw){
+  const type = (raw.type || raw.kind || "").toLowerCase();
   return {
     id: raw.id || raw.slug || raw.name || "",
     name: raw.name || "Untitled",
@@ -30,7 +23,7 @@ function normalizeItem(raw) {
     repo: raw.repo || raw.repository || raw.url || "",
     homepage: raw.homepage || "",
     jar: raw.jar || raw.download_url || raw.download || "",
-    type: ["plugin", "theme", "core"].includes(type) ? type : (raw.core ? "core" : (raw.theme ? "theme" : "plugin")),
+    type: ["plugin","theme","core"].includes(type) ? type : (raw.core ? "core" : (raw.theme ? "theme" : "plugin")),
     authors: normalizeArray(raw.authors || raw.author || []),
     tags: normalizeArray(raw.tags || []),
     mc: normalizeArray(raw.mc_versions || raw.mc || []),
@@ -39,202 +32,141 @@ function normalizeItem(raw) {
   };
 }
 
-function normalizeArray(v) {
-  if (!v) return [];
-  if (Array.isArray(v)) return v.filter(Boolean).map(String);
-  return String(v).split(/[,\s]+/).filter(Boolean);
-}
-
-function tokenize(q) {
-  return (q || "")
-    .toLowerCase()
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-}
-
-function includes(hay, needle) {
-  return hay.toLowerCase().includes(needle);
-}
-
-function startsWith(hay, needle) {
-  return hay.toLowerCase().startsWith(needle);
-}
-
-function highlight(text, tokens) {
-  if (!text || !tokens.length) return escapeHtml(text || "");
-  // naive but effective: wrap any token occurrences; avoid nested tags
-  let out = escapeHtml(text);
-  tokens
-    .sort((a, b) => b.length - a.length)
-    .forEach(tok => {
-      const re = new RegExp(`(${escapeRegExp(tok)})`, "ig");
-      out = out.replace(re, "<mark>$1</mark>");
-    });
+const tokenize = q => (q||"").toLowerCase().trim().split(/\s+/).filter(Boolean);
+const escHtml = s => String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+const escRe   = s => s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+function highlight(text, toks){
+  if(!text || !toks.length) return escHtml(text||"");
+  let out = escHtml(text);
+  toks.sort((a,b)=>b.length-a.length).forEach(t=>{
+    out = out.replace(new RegExp(`(${escRe(t)})`,"ig"),"<mark>$1</mark>");
+  });
   return out;
 }
 
-function escapeHtml(s) {
-  return String(s)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/* ---------- scoring & filtering ---------- */
-
-function scoreItem(item, tokens) {
-  if (!tokens.length) return 0;
-
-  // fields to search
-  const name = item.name.toLowerCase();
-  const desc = (item.description || "").toLowerCase();
-  const authors = item.authors.join(" ").toLowerCase();
-  const tags = item.tags.join(" ").toLowerCase();
-  const repo = (item.repo || "").toLowerCase();
-
-  let score = 0;
-
-  for (const t of tokens) {
-    // hierarchy: exact name > startsWith(name) > includes in name > others
-    if (name === t) score += 30;
-    else if (startsWith(name, t)) score += 20;
-    else if (includes(name, t)) score += 14;
-
-    if (includes(desc, t)) score += 6;
-    if (includes(authors, t)) score += 5;
-    if (includes(tags, t)) score += 5;
-    if (includes(repo, t)) score += 4;
+/* ---------- search ---------- */
+function scoreItem(item, tokens){
+  if(!tokens.length) return 0;
+  const name=item.name.toLowerCase(), desc=(item.description||"").toLowerCase(),
+        authors=item.authors.join(" ").toLowerCase(), tags=item.tags.join(" ").toLowerCase(),
+        repo=(item.repo||"").toLowerCase();
+  let s=0;
+  for(const t of tokens){
+    if(name===t) s+=30; else if(name.startsWith(t)) s+=20; else if(name.includes(t)) s+=14;
+    if(desc.includes(t)) s+=6; if(authors.includes(t)) s+=5; if(tags.includes(t)) s+=5; if(repo.includes(t)) s+=4;
   }
-
-  // small bump if multiple tokens all matched somewhere
-  if (score > 0 && tokens.length > 1) score += 3;
-
-  return score;
+  if(s>0 && tokens.length>1) s+=3;
+  return s;
 }
 
-function passTypeFilter(item) {
-  if (ACTIVE_FILTER === "all") return true;
-  if (ACTIVE_FILTER === "core") return item.type === "core";
-  if (ACTIVE_FILTER === "plugin") return item.type === "plugin";
-  if (ACTIVE_FILTER === "theme") return item.type === "theme";
-  return true;
-}
-
-/* ---------- rendering ---------- */
-
-function render(items, tokens) {
+function render(items, tokens){
   els.results.innerHTML = "";
-  els.results.setAttribute("aria-busy", "false");
+  els.results.setAttribute("aria-busy","false");
+  if(!items.length){ els.empty.style.display=""; return; }
+  els.empty.style.display="none";
 
-  if (!items.length) {
-    els.empty.style.display = "";
-    return;
-  }
-  els.empty.style.display = "none";
-
-  const frag = document.createDocumentFragment();
-
-  for (const it of items) {
-    const li = document.createElement("li");
-    li.className = "card";
-
-    const typeBadgeClass =
-      it.type === "core" ? "badge core" :
-      it.type === "theme" ? "badge theme" : "badge plugin";
-
-    const nameHtml = highlight(it.name, tokens);
-    const descHtml = highlight(it.description || "", tokens);
-
+  const frag=document.createDocumentFragment();
+  for(const it of items){
+    const li=document.createElement("li");
+    li.className="card";
+    const typeClass = it.type==="core" ? "badge core" : it.type==="theme" ? "badge theme" : "badge plugin";
     li.innerHTML = `
-      <h3>${nameHtml}</h3>
+      <h3>${highlight(it.name,tokens)}</h3>
       <div class="meta">
-        <span class="${typeBadgeClass}">${it.type}</span>
-        ${it.version ? `<span class="badge">v${escapeHtml(it.version)}</span>` : ""}
-        ${it.mc.length ? `<span class="badge" title="MC versions">${escapeHtml(it.mc.join(", "))}</span>` : ""}
-        ${it.authors.length ? `<span class="badge" title="Author(s)">${escapeHtml(it.authors.join(", "))}</span>` : ""}
+        <span class="${typeClass}">${it.type}</span>
+        ${it.version ? `<span class="badge">v${escHtml(it.version)}</span>` : ""}
+        ${it.mc.length ? `<span class="badge" title="MC versions">${escHtml(it.mc.join(", "))}</span>` : ""}
+        ${it.authors.length ? `<span class="badge" title="Author(s)">${escHtml(it.authors.join(", "))}</span>` : ""}
       </div>
-      <p class="desc">${descHtml || "<span class='small'>No description</span>"}</p>
+      <p class="desc">${it.description ? highlight(it.description,tokens) : "<span class='small'>No description</span>"}</p>
       <div class="links">
         ${it.repo ? `<a class="button" href="${it.repo}" target="_blank" rel="noopener">Repo</a>` : ""}
         ${it.jar ? `<a class="button" href="${it.jar}" target="_blank" rel="noopener">Download JAR</a>` : ""}
         ${it.homepage ? `<a class="button" href="${it.homepage}" target="_blank" rel="noopener">Homepage</a>` : ""}
       </div>
-      ${it.updated ? `<div class="small" style="margin-top:8px">Updated: ${escapeHtml(it.updated)}</div>` : ""}
+      ${it.updated ? `<div class="small" style="margin-top:8px">Updated: ${escHtml(it.updated)}</div>` : ""}
     `;
-
     frag.appendChild(li);
   }
-
   els.results.appendChild(frag);
 }
 
-/* ---------- search pipeline ---------- */
-
-function runSearch() {
+function runSearch(){
   const q = els.search.value.trim();
   const tokens = tokenize(q);
 
-  const filtered = DATA
-    .filter(passTypeFilter)
-    .map(item => ({ item, score: scoreItem(item, tokens) }))
-    .filter(x => tokens.length ? x.score > 0 : true)
-    .sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name))
-    .slice(0, 200) // safety cap
+  const ranked = DATA
+    .map(item => ({ item, score: tokens.length ? scoreItem(item, tokens) : 0 }))
+    .filter(x => tokens.length ? x.score > 0 : false)   // keep empty until typing
+    .sort((a,b)=> b.score - a.score || a.item.name.localeCompare(b.item.name))
+    .slice(0,200)
+    .map(x=>x.item);
 
-  render(filtered.map(x => x.item), tokens);
+  render(ranked, tokens);
 }
 
-/* ---------- init ---------- */
+/* ---------- suggestions ---------- */
+function buildSuggestions(q){
+  const term = q.toLowerCase();
+  if(!term){ els.suggest.classList.remove("show"); els.suggest.innerHTML=""; SUGGEST_INDEX=-1; return; }
 
-async function init() {
-  try {
-    const res = await fetch(API_URL, { cache: "no-store" });
+  const starts=[], contains=[];
+  for(const it of DATA){
+    const n = it.name.toLowerCase();
+    if(n.startsWith(term)) starts.push(it);
+    else if(n.includes(term)) contains.push(it);
+  }
+  const list = [...starts, ...contains].slice(0,8);
+
+  els.suggest.innerHTML = list.map((it,i)=>`<li role="option" data-name="${escHtml(it.name)}" ${i===0?'class="active"':''}>${escHtml(it.name)}</li>`).join("");
+  SUGGEST_INDEX = list.length ? 0 : -1;
+  els.suggest.classList.toggle("show", list.length>0);
+}
+
+function commitSuggestion(idx){
+  const items = Array.from(els.suggest.querySelectorAll("li"));
+  if(idx<0 || idx>=items.length) return;
+  const name = items[idx].getAttribute("data-name");
+  els.search.value = name;
+  els.suggest.classList.remove("show");
+  runSearch();
+}
+
+/* ---------- init & events ---------- */
+async function init(){
+  try{
+    const res = await fetch(API_URL, { cache:"no-store" });
     const raw = await res.json();
-
-    // The API returns an array (plugins + themes). Normalize each entry.
     DATA = Array.isArray(raw) ? raw.map(normalizeItem) : [];
-
-    els.results.setAttribute("aria-busy", "false");
-    // Initial render (empty or full). Keep empty by default until user types:
-    render([], []);
-  } catch (e) {
-    els.results.setAttribute("aria-busy", "false");
+    els.results.setAttribute("aria-busy","false");
+  }catch(err){
+    els.results.setAttribute("aria-busy","false");
     els.empty.textContent = "Failed to load API data.";
   }
 }
 
-const debouncedSearch = debounce(runSearch, 120);
+const debouncedSearch = debounce(()=>{
+  buildSuggestions(els.search.value);
+  runSearch();
+},120);
 
 els.search.addEventListener("input", debouncedSearch);
-els.search.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    els.search.value = "";
-    debouncedSearch();
-  }
+els.search.addEventListener("keydown",(e)=>{
+  const items = Array.from(els.suggest.querySelectorAll("li"));
+  if(e.key==="ArrowDown" && items.length){ e.preventDefault(); SUGGEST_INDEX=Math.min(items.length-1,SUGGEST_INDEX+1); items.forEach(li=>li.classList.remove("active")); items[SUGGEST_INDEX].classList.add("active"); }
+  else if(e.key==="ArrowUp" && items.length){ e.preventDefault(); SUGGEST_INDEX=Math.max(0,SUGGEST_INDEX-1); items.forEach(li=>li.classList.remove("active")); items[SUGGEST_INDEX].classList.add("active"); }
+  else if(e.key==="Enter" && items.length && els.suggest.classList.contains("show")){ e.preventDefault(); commitSuggestion(SUGGEST_INDEX<0?0:SUGGEST_INDEX); }
+  else if(e.key==="Escape"){ els.suggest.classList.remove("show"); els.search.select(); }
 });
 
-els.chips.forEach(btn => {
-  btn.addEventListener("click", () => {
-    els.chips.forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    ACTIVE_FILTER = btn.dataset.filter;
-    runSearch();
-  });
+els.suggest.addEventListener("mousedown",(e)=>{
+  const li = e.target.closest("li"); if(!li) return;
+  const idx = Array.from(els.suggest.children).indexOf(li);
+  commitSuggestion(idx);
 });
 
-// Quick hint for keyboard users
-els.search.setAttribute("title", "Tip: Press Esc to clear");
-document.addEventListener("keydown", (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-    e.preventDefault();
-    els.search.focus();
-    els.search.select();
-  }
+document.addEventListener("click",(e)=>{
+  if(!e.target.closest(".search-wrap")) els.suggest.classList.remove("show");
 });
 
 init();
