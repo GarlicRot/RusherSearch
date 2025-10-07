@@ -1,36 +1,32 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="UTF-8">
   <title>RusherHack Plugin Search</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="preconnect" href="https://rusherdevelopment.github.io" />
-  <link rel="stylesheet" href="style.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Search for RusherHack plugins and themes using the public API.">
+  <link rel="preconnect" href="https://rusherdevelopment.github.io">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="wrap">
     <h1>🔍 RusherHack Plugin Search</h1>
-    <p class="sub">Type to search plugins & themes from the public API.</p>
-
+    <p class="sub">Search plugins and themes from the RusherHack API.</p>
     <div id="status" class="status small" aria-live="polite">Loading…</div>
-
     <div class="controls">
       <div class="search-wrap">
-        <input id="search" type="search" placeholder="Search by name, creator, or tag…" autocomplete="off" />
-        <ul id="suggest" class="suggest" role="listbox" aria-label="Suggestions"></ul>
+        <input id="search" type="search" placeholder="Search by name, creator, or tag…" autocomplete="off" aria-label="Search plugins">
+        <ul id="suggest" class="suggest" role="listbox" aria-label="Search suggestions"></ul>
       </div>
     </div>
   </header>
-
   <main class="wrap">
     <ul id="results" class="grid" aria-live="polite" aria-busy="true"></ul>
-    <div id="empty" class="empty">Start typing to search the catalog…</div>
+    <div id="empty" class="empty" role="alert">Start typing to search the catalog…</div>
   </main>
-
   <footer class="wrap foot">
-    <small>Powered by the <a href="https://rusherdevelopment.github.io/rusherhack-plugins/api/v1/" target="_blank" rel="noopener">RusherHacks Plugin/Theme API</a></small>
+    <small>Powered by the <a href="https://rusherdevelopment.github.io/rusherhack-plugins/api/v1/" target="_blank" rel="noopener">RusherHack Plugin/Theme API</a></small>
   </footer>
-
   <script src="script.js" defer></script>
 </body>
 </html>
