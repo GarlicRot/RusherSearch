@@ -45,15 +45,23 @@ jobs:
         id: lh
         shell: bash
         run: |
-          FILE=$(ls -1 lhci/*.json | head -n1)
-          PERF=$(jq -r '.[] | select(.summary) | .summary.categories.performance' "$FILE")
-          ACCESS=$(jq -r '.[] | select(.summary) | .summary.categories.accessibility' "$FILE")
-          SEO=$(jq -r '.[] | select(.summary) | .summary.categories.seo' "$FILE")
-          BP=$(jq -r '.[] | select(.summary) | .summary.categories."best-practices"' "$FILE")
+          # Prefer *report.json produced by LHCI; fall back to any JSON in folder
+          FILE=$(ls -1 lhci/*report.json 2>/dev/null | head -n1 || true)
+          if [ -z "$FILE" ]; then FILE=$(ls -1 lhci/*.json | head -n1); fi
+          echo "Using Lighthouse file: $FILE"
+
+          # If the JSON has a 'summary' (older lhci upload format), use that.
+          # Otherwise use standard LHR layout: categories.*.score
+          PERF=$(jq -r 'if has("summary") then .summary.categories.performance else .categories.performance.score end' "$FILE")
+          ACCESS=$(jq -r 'if has("summary") then .summary.categories.accessibility else .categories.accessibility.score end' "$FILE")
+          SEO=$(jq -r 'if has("summary") then .summary.categories.seo else .categories.seo.score end' "$FILE")
+          BP=$(jq -r 'if has("summary") then .summary.categories["best-practices"] else .categories["best-practices"].score end' "$FILE")
+
           echo "perf=$PERF" >> "$GITHUB_OUTPUT"
           echo "access=$ACCESS" >> "$GITHUB_OUTPUT"
           echo "seo=$SEO" >> "$GITHUB_OUTPUT"
           echo "bp=$BP" >> "$GITHUB_OUTPUT"
+
           {
             echo "### Lighthouse scores"
             echo ""
