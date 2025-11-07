@@ -1,29 +1,42 @@
 const API_ROOT = "https://rusherdevelopment.github.io/rusherhack-plugins/api/v1";
 const SEARCH_URL = `${API_ROOT}/search-index.json`;
-const INDEX_URL = `${API_ROOT}/index.json`;
+const INDEX_URL  = `${API_ROOT}/index.json`;
+const VERS_URL   = `${API_ROOT}/versions.json`;
 
 // DOM elements cache
 const els = {
-  search: document.getElementById("search"),
+  search:  document.getElementById("search"),
   suggest: document.getElementById("suggest"),
   results: document.getElementById("results"),
-  empty: document.getElementById("empty"),
-  status: document.getElementById("status"),
+  empty:   document.getElementById("empty"),
+  status:  document.getElementById("status"),
+
+  // filters
+  fType:  document.getElementById("f-type"),
+  fCore:  document.getElementById("f-core"),
+  fMc:    document.getElementById("f-mc"),
+  mcDL:   document.getElementById("mc-versions"),
+  fClear: document.getElementById("f-clear"),
+};
+
+// URL params
+const params = new URLSearchParams(location.search);
+const setParam = (k, v) => {
+  if (v) params.set(k, v);
+  else params.delete(k);
+  const q = params.toString();
+  history.replaceState(null, "", q ? `?${q}` : location.pathname);
 };
 
 // Data stores
-let DATA = []; // Full items (rich)
+let DATA = [];        // Full items (rich)
 let SUGGEST_SRC = []; // Light items (suggestions)
 const SUGGEST_BY_ID = new Map();
 const SUGGEST_BY_NAME = new Map();
 
 /* ------------- Utilities ------------- */
 const debounce = (fn, ms = 150) => {
-  let t;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  };
+  let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 };
 const escapeHTML = (s) => String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -31,7 +44,7 @@ const tokenize = (q) => (q || "").toLowerCase().trim().split(/\s+/).filter(Boole
 const markText = (txt, tokens) => {
   if (!txt || !tokens.length) return escapeHTML(txt || "");
   let out = escapeHTML(txt);
-  tokens.sort((a, b) => b.length - a.length).forEach((x) => {
+  tokens.slice().sort((a,b)=>b.length-a.length).forEach((x) => {
     out = out.replace(new RegExp(`(${escapeRegex(x)})`, "ig"), "<mark>$1</mark>");
   });
   return out;
@@ -75,12 +88,15 @@ const normalizeSearchEntry = (e) => {
   return rec;
 };
 
+// IMPORTANT: expose both "kind" (plugin|theme) and "class" (core|regular)
 const normalizeFullItem = (raw) => {
   const cObj = typeof raw.creator === "object" ? raw.creator : null;
   const authors = Array.isArray(raw.authors) ? raw.authors : raw.author ? [String(raw.author)] : [];
   const creatorName = cObj?.name || raw.creator_slug || (typeof raw.creator === "string" ? raw.creator : "") || first(authors) || "";
+
   const { owner, repo } = parseOwnerRepo(raw.repo || raw.repository || "");
   const repoUrl = raw.repo_url || (owner && repo ? `https://github.com/${owner}/${repo}` : raw.url || "");
+
   const mc = Array.isArray(raw.mc_versions)
     ? raw.mc_versions
     : raw.mc_versions
@@ -92,6 +108,16 @@ const normalizeFullItem = (raw) => {
     : raw.mc
     ? [String(raw.mc)]
     : [];
+
+  // kind: plugin|theme; class: core|regular
+  const kind =
+    (raw.type || raw.kind || "").toString().toLowerCase().replace(/s$/, "") || // "plugins" -> "plugin"
+    (raw.is_theme ? "theme" : "plugin");
+
+  const cls =
+    (raw.class || raw.category || "").toString().toLowerCase() ||
+    (raw.is_core ? "core" : "regular");
+
   return {
     id: raw.id || raw.slug || raw.name || repoUrl || `${owner}/${repo}` || "",
     name: raw.name || repo || "Untitled",
@@ -99,11 +125,16 @@ const normalizeFullItem = (raw) => {
     repo: repoUrl,
     homepage: raw.homepage || "",
     jar: raw.jar || raw.jar_url || raw.download_url || raw.download || "",
-    type: (raw.type || raw.kind || (raw.is_core ? "core" : "plugin")).toLowerCase(),
+    // legacy "type" kept for UI badge; but also expose kind/class
+    type: kind,
+    kind,
+    class: cls,
     authors,
     creator: creatorName,
     creatorUrl: cObj?.url || (creatorName ? `https://github.com/${creatorName}` : ""),
-    avatar: cObj?.avatar?.replace(/(\?|&)size=\d+/i, "").replace("github.com", "avatars.githubusercontent.com") || `https://avatars.githubusercontent.com/${owner || creatorName || ""}`,
+    avatar:
+      (cObj?.avatar || "").replace(/(\?|&)size=\d+/i, "").replace("github.com", "avatars.githubusercontent.com") ||
+      `https://avatars.githubusercontent.com/${owner || creatorName || ""}`,
     tags: Array.isArray(raw.tags) ? raw.tags : [],
     mc,
     updated: raw.updated || raw.last_updated || raw.release_date || "",
@@ -123,24 +154,30 @@ const fetchJSON = async (url) => {
   }
 };
 
+const loadVersions = async () => {
+  try {
+    const list = await fetchJSON(VERS_URL);
+    if (Array.isArray(list) && els.mcDL) {
+      els.mcDL.innerHTML = list.map((v) => `<option value="${escapeHTML(String(v))}">`).join("");
+    }
+  } catch {
+    // ignore failures
+  }
+};
+
 const loadData = async () => {
   els.status.textContent = "Loading…";
   try {
-    // Load compact suggestions
     const compact = await fetchJSON(SEARCH_URL);
-    if (Array.isArray(compact)) {
-      SUGGEST_SRC = compact.map(normalizeSearchEntry);
-    }
+    if (Array.isArray(compact)) SUGGEST_SRC = compact.map(normalizeSearchEntry);
   } catch (e) {
     console.warn("[RusherSearch] Failed to load search-index:", e);
   }
 
   try {
-    // Load full items
     const full = await fetchJSON(INDEX_URL);
     DATA = (Array.isArray(full) ? full : Object.values(full).filter(Array.isArray).flat()).map(normalizeFullItem);
 
-    // Fallback to full data for suggestions if needed
     if (!SUGGEST_SRC.length) {
       SUGGEST_SRC = DATA.map((d) => ({
         id: d.id,
@@ -149,8 +186,7 @@ const loadData = async () => {
         tags: d.tags || [],
         versions: d.mc || [],
       }));
-      SUGGEST_BY_ID.clear();
-      SUGGEST_BY_NAME.clear();
+      SUGGEST_BY_ID.clear(); SUGGEST_BY_NAME.clear();
       SUGGEST_SRC.forEach((rec) => {
         if (rec.id) SUGGEST_BY_ID.set(rec.id.toLowerCase(), rec);
         SUGGEST_BY_NAME.set(rec.name.toLowerCase(), rec);
@@ -163,11 +199,62 @@ const loadData = async () => {
   }
 };
 
+/* ------------- Filters ------------- */
+
+function hydrateControlsFromURL() {
+  // read URL → controls
+  const q    = params.get("q")    || "";
+  const type = params.get("type") || "";
+  const core = params.get("core") || "";
+  const mc   = params.get("mc")   || "";
+
+  if (els.search) els.search.value = q;
+  if (els.fType)  els.fType.value  = type;
+  if (els.fCore)  els.fCore.value  = core;
+  if (els.fMc)    els.fMc.value    = mc;
+}
+
+function entryMatchesFilters(entry, tokens, type, core, mc) {
+  // text query
+  if (tokens.length) {
+    const hay = [
+      entry.name,
+      entry.description,
+      (entry.authors || []).join(" "),
+      entry.creator || "",
+      (entry.tags || []).join(" "),
+      entry.repo || ""
+    ].join(" ").toLowerCase();
+    const okAll = tokens.every((t) => hay.includes(t));
+    if (!okAll) return false;
+  }
+
+  if (type) {
+    const kind = (entry.kind || entry.type || "").toLowerCase();
+    if (kind !== type.toLowerCase()) return false;
+  }
+
+  if (core) {
+    const cls = (entry.class || "").toLowerCase();
+    if (cls !== core.toLowerCase()) return false;
+  }
+
+  if (mc) {
+    const list = (entry.mc || []).map((v) => String(v).toLowerCase());
+    const want = String(mc).toLowerCase();
+    const family = want.replace(/x$/, ""); // allow 1.21.x or 1.21.
+    const ok = list.some((v) => v === want || (family && v.startsWith(family)));
+    if (!ok) return false;
+  }
+
+  return true;
+}
+
 /* ------------- Search & Render ------------- */
 const score = (item, tokens) => {
   if (!tokens.length) return 0;
   const fields = {
-    name: item.name.toLowerCase(),
+    name: (item.name || "").toLowerCase(),
     desc: (item.description || "").toLowerCase(),
     authors: (item.authors || []).join(" ").toLowerCase(),
     tags: (item.tags || []).join(" ").toLowerCase(),
@@ -208,7 +295,7 @@ const avatarBlock = (imgUrl, fallbackText, ownerLike) => {
   if (!src) return `<div class="avatar fallback">${escapeHTML(initials)}</div>`;
   return `<img class="avatar" loading="lazy" src="${src}" srcset="${srcset}" sizes="64px"
                alt="${escapeHTML(fallbackText || "creator")}"
-               onerror="this.replaceWith(document.createElement('div')).className='avatar fallback'; this.textContent='${escapeHTML(initials)}'">`;
+               onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'avatar fallback',textContent:'${escapeHTML(initials)}'}))">`;
 };
 
 const render = (items, tokens) => {
@@ -240,7 +327,8 @@ const render = (items, tokens) => {
           <h3>${markText(item.name, tokens)}</h3>
           ${creatorLine}
           <div class="meta">
-            ${item.type ? `<span class="badge">${escapeHTML(item.type)}</span>` : ""}
+            ${item.kind ? `<span class="badge">${escapeHTML(item.kind)}</span>` : ""}
+            ${item.class ? `<span class="badge">${escapeHTML(item.class)}</span>` : ""}
             ${item.version ? `<span class="badge">${escapeHTML(item.version)}</span>` : ""}
             ${item.updated ? `<span class="badge" title="Last updated">${escapeHTML(item.updated)}</span>` : ""}
           </div>
@@ -261,35 +349,40 @@ const render = (items, tokens) => {
 };
 
 const runSearch = () => {
-  const q = els.search.value.trim();
+  const q = (els.search?.value || "").trim();
   const tokens = tokenize(q);
-  if (!tokens.length) return render([], []);
 
-  const source = DATA.length
+  // Sync URL from controls
+  const type = (els.fType?.value || "").trim();
+  const core = (els.fCore?.value || "").trim();
+  const mc   = (els.fMc?.value || "").trim();
+
+  setParam("q", q);
+  setParam("type", type);
+  setParam("core", core);
+  setParam("mc", mc);
+
+  // Build source
+  const base = DATA.length
     ? DATA
     : SUGGEST_SRC.map((s) => ({
-        id: s.id,
-        name: s.name,
-        description: "",
+        id: s.id, name: s.name, description: "",
         authors: s.creator ? [s.creator] : [],
-        creator: s.creator || "",
-        tags: s.tags || [],
-        mc: s.versions || [],
-        repo: "",
-        homepage: "",
-        jar: "",
-        type: "",
-        version: "",
-        updated: "",
-        owner: s.creator || null,
+        creator: s.creator || "", tags: s.tags || [], mc: s.versions || [],
+        repo: "", homepage: "", jar: "",
+        kind: "", class: "", version: "", updated: "", owner: s.creator || null,
       }));
 
-  const ranked = source
+  // Filter first, then rank
+  const filtered = base.filter((e) => entryMatchesFilters(e, tokens, type, core, mc));
+
+  const ranked = (tokens.length ? filtered
     .map((item) => ({ item, score: score(item, tokens) }))
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name))
-    .slice(0, 200)
-    .map((x) => x.item);
+    .map((x) => x.item)
+    : filtered // no tokens: show filtered list (e.g., Type=Core)
+  ).slice(0, 200);
 
   render(ranked, tokens);
 };
@@ -298,7 +391,7 @@ const runSearch = () => {
 let SUGGEST_INDEX_ACTIVE = -1;
 
 const buildSuggestions = (q) => {
-  const term = q.toLowerCase();
+  const term = (q || "").toLowerCase();
   if (!term || !SUGGEST_SRC.length) {
     els.suggest?.classList.remove("show");
     if (els.suggest) els.suggest.innerHTML = "";
@@ -333,9 +426,16 @@ const commitSuggestion = (idx) => {
 
 /* ------------- Init & Events ------------- */
 const init = async () => {
+  // hydrate controls from URL first (so initial render reflects params)
+  hydrateControlsFromURL();
+
   els.results.setAttribute("aria-busy", "true");
-  await loadData();
+  await Promise.all([loadVersions(), loadData()]);
   els.results.setAttribute("aria-busy", "false");
+
+  // initial run based on URL/filter state
+  buildSuggestions(els.search.value);
+  runSearch();
 };
 
 const debouncedSearch = debounce(() => {
@@ -364,14 +464,41 @@ els.search.addEventListener("keydown", (e) => {
     els.search.select();
   }
 });
+
+// click a suggestion
 els.suggest.addEventListener("mousedown", (e) => {
   const li = e.target.closest("li");
   if (!li) return;
   const idx = Array.from(els.suggest.children).indexOf(li);
   commitSuggestion(idx);
 });
+
+// close suggestions on outside click
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".search-wrap")) els.suggest.classList.remove("show");
+});
+
+// filters: change → re-run
+["change", "input"].forEach((evt) => {
+  els.fType?.addEventListener(evt, runSearch);
+  els.fCore?.addEventListener(evt, runSearch);
+  els.fMc?.addEventListener(evt, runSearch);
+});
+
+// clear filters
+els.fClear?.addEventListener("click", () => {
+  if (els.fType) els.fType.value = "";
+  if (els.fCore) els.fCore.value = "";
+  if (els.fMc)   els.fMc.value   = "";
+  ["type","core","mc"].forEach((k)=>params.delete(k));
+  setParam("q", els.search.value.trim()); // keep query if any
+  runSearch();
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "/" && document.activeElement !== els.search) {
+    e.preventDefault(); els.search?.focus();
+  }
 });
 
 init();
