@@ -5,7 +5,6 @@
   <title>RusherSearch – RusherHack Plugin Search</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <!-- SEO / previews -->
   <meta name="description" content="Search for RusherHack plugins and themes using the public API.">
   <meta property="og:title" content="RusherSearch – RusherHack Plugin/Theme Search">
   <meta property="og:description" content="Instant, filterable search for RusherHack plugins and themes.">
@@ -15,22 +14,29 @@
   <meta name="twitter:card" content="summary_large_image">
 
   <link rel="preconnect" href="https://rusherdevelopment.github.io">
+  <link rel="icon" href="https://raw.githubusercontent.com/RusherDevelopment/rusherhack-plugins/refs/heads/main/Assets/RusherHacks/rh_head.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="wrap">
-    <h1>🔍 RusherHack Plugin Search</h1>
+    <h1 class="brand">
+      <img
+        class="brand-icon"
+        src="https://raw.githubusercontent.com/RusherDevelopment/rusherhack-plugins/refs/heads/main/Assets/RusherHacks/rh_head.png"
+        alt=""
+        width="36" height="36" loading="eager" decoding="async" aria-hidden="true"
+      />
+      <span>RusherHack Plugin Search</span>
+    </h1>
     <p class="sub">Search plugins and themes from the RusherHack API.</p>
     <div id="status" class="status small" aria-live="polite">Loading…</div>
 
     <div class="controls">
-      <!-- Search -->
       <div class="search-wrap">
         <input id="search" type="search" placeholder="Search by name, creator, or tag…" autocomplete="off" aria-label="Search plugins">
         <ul id="suggest" class="suggest" role="listbox" aria-label="Search suggestions"></ul>
       </div>
 
-      <!-- Filters -->
       <form id="filters" class="filters" role="region" aria-label="Filters" onsubmit="return false;">
         <label class="filter-item">Type
           <select id="f-type" aria-label="Filter by type">
@@ -66,7 +72,11 @@
   </main>
 
   <footer class="wrap foot">
-    <small>Powered by the <a href="https://rusherdevelopment.github.io/rusherhack-plugins/api/v1/" target="_blank" rel="noopener">RusherHack Plugin/Theme API</a></small>
+    <small>Powered by the
+      <a class="foot-link" href="https://rusherdevelopment.github.io/rusherhack-plugins/api/v1/" target="_blank" rel="noopener">
+        RusherHack Plugin/Theme API
+      </a>
+    </small>
   </footer>
 
   <script src="script.js" defer></script>
