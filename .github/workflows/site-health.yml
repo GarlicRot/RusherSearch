@@ -1,0 +1,130 @@
+name: Site health
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"  # daily 09:17 UTC
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  TARGET_URL: https://garlicrot.github.io/RusherSearch
+  PERF_MIN: "0.90"
+  ACCESS_MIN: "0.90"
+  SEO_MIN: "0.95"
+  BP_MIN: "0.90"
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install tooling
+        run: |
+          npm i -g @lhci/cli@0.14.x linkinator@6
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+
+      - name: Run Lighthouse
+        run: |
+          lhci autorun \
+            --collect.url="${TARGET_URL}" \
+            --collect.numberOfRuns=1 \
+            --upload.target=filesystem \
+            --upload.outputDir=./lhci
+
+      - name: Parse Lighthouse scores
+        id: lh
+        shell: bash
+        run: |
+          FILE=$(ls -1 lhci/*.json | head -n1)
+          PERF=$(jq -r '.[] | select(.summary) | .summary.categories.performance' "$FILE")
+          ACCESS=$(jq -r '.[] | select(.summary) | .summary.categories.accessibility' "$FILE")
+          SEO=$(jq -r '.[] | select(.summary) | .summary.categories.seo' "$FILE")
+          BP=$(jq -r '.[] | select(.summary) | .summary.categories."best-practices"' "$FILE")
+          echo "perf=$PERF" >> "$GITHUB_OUTPUT"
+          echo "access=$ACCESS" >> "$GITHUB_OUTPUT"
+          echo "seo=$SEO" >> "$GITHUB_OUTPUT"
+          echo "bp=$BP" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Lighthouse scores"
+            echo ""
+            echo "| Category | Score | Minimum |"
+            echo "|---|---:|---:|"
+            echo "| Performance | ${PERF} | ${PERF_MIN} |"
+            echo "| Accessibility | ${ACCESS} | ${ACCESS_MIN} |"
+            echo "| SEO | ${SEO} | ${SEO_MIN} |"
+            echo "| Best Practices | ${BP} | ${BP_MIN} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Link check (linkinator)
+        id: links
+        shell: bash
+        run: |
+          linkinator "${TARGET_URL}" --recurse --format json --timeout 15000 > linkinator.json || true
+          BROKEN_COUNT=$(jq '[.links[] | select(.state=="BROKEN")] | length' linkinator.json)
+          echo "broken=${BROKEN_COUNT}" >> "$GITHUB_OUTPUT"
+          jq '[.links[] | select(.state=="BROKEN")][0:10] | map({status, url, parent})' linkinator.json > broken-sample.json
+          {
+            echo ""
+            echo "### Link check"
+            echo ""
+            echo "Broken links: ${BROKEN_COUNT}"
+            if [ "$BROKEN_COUNT" -gt 0 ]; then
+              echo ""
+              echo "Top examples:"
+              jq -r '.[] | "- \(.status) — \(.url)\n  parent: \(.parent)"' broken-sample.json
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create issue on regression
+        if: ${{ fromJSON(steps.lh.outputs.perf) < fromJSON(env.PERF_MIN)
+              || fromJSON(steps.lh.outputs.access) < fromJSON(env.ACCESS_MIN)
+              || fromJSON(steps.lh.outputs.seo) < fromJSON(env.SEO_MIN)
+              || fromJSON(steps.lh.outputs.bp) < fromJSON(env.BP_MIN)
+              || fromJSON(steps.links.outputs.broken) > 0 }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const scores = {
+              performance: '${{ steps.lh.outputs.perf }}',
+              accessibility: '${{ steps.lh.outputs.access }}',
+              seo: '${{ steps.lh.outputs.seo }}',
+              best_practices: '${{ steps.lh.outputs.bp }}',
+              broken_links: '${{ steps.links.outputs.broken }}'
+            };
+            const title = 'Site health regression detected';
+            const body = [
+              `URL: ${process.env.TARGET_URL}`,
+              '',
+              'Scores',
+              `- Performance: ${scores.performance} (min ${process.env.PERF_MIN})`,
+              `- Accessibility: ${scores.accessibility} (min ${process.env.ACCESS_MIN})`,
+              `- SEO: ${scores.seo} (min ${process.env.SEO_MIN})`,
+              `- Best Practices: ${scores.best_practices} (min ${process.env.BP_MIN})`,
+              `- Broken links: ${scores.broken_links}`,
+              '',
+              'Artifacts include full Lighthouse JSON and Linkinator report.'
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title, body
+            });
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-health-reports
+          path: |
+            lhci
+            linkinator.json
+            broken-sample.json
