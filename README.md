@@ -2,8 +2,6 @@
 
 [![pages-build-deployment](https://github.com/GarlicRot/RusherSearch/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/GarlicRot/RusherSearch/actions/workflows/pages/pages-build-deployment)
 
-[![Site health](https://github.com/GarlicRot/RusherSearch/actions/workflows/site-health.yml/badge.svg)](https://github.com/GarlicRot/RusherSearch/actions/workflows/site-health.yml)
-
 A tiny, fast, **static** site that showcases what you can build on top of the
 [RusherHacks Plugin/Theme API](https://rusherdevelopment.github.io/rusherhack-plugins/api/v1/).
 It provides instant search with suggestions, rich result cards, creator avatars,
