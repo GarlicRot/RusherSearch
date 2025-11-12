@@ -10,7 +10,6 @@ on:
   schedule:
     - cron: "17 9 * * *"  # daily 09:17 UTC
 
-# Minimal privileges for this job
 permissions:
   contents: read
   issues: write
@@ -20,22 +19,16 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Pages to audit (space-separated). Include a few critical routes.
   TARGET_URLS: >
     https://garlicrot.github.io/RusherSearch/
     https://garlicrot.github.io/RusherSearch/#/plugins
     https://garlicrot.github.io/RusherSearch/#/themes
     https://garlicrot.github.io/RusherSearch/#/about
-
-  # Category minimums (0–1)
   PERF_MIN: "0.90"
   ACCESS_MIN: "0.90"
   SEO_MIN: "0.95"
   BP_MIN: "0.90"
-
-  # Linkinator behavior
   LINKINATOR_TIMEOUT_MS: "15000"
-  # Skip ANY non-site link + direct release/download assets, mailto, tel
   LINKINATOR_SKIP_1: "^(?!https://garlicrot\\.github\\.io/)"
   LINKINATOR_SKIP_2: "https://github\\.com/.*/releases/download/.*"
   LINKINATOR_SKIP_3: "^mailto:|^tel:"
@@ -44,27 +37,26 @@ jobs:
   health:
     runs-on: ubuntu-latest
     steps:
-      - name: 📥 Checkout
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 🔧 Setup Node
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: 📦 Install tooling
+      - name: Install tooling
         run: |
           npm i -g @lhci/cli@0.14.x linkinator@6
           sudo apt-get update -y
           sudo apt-get install -y jq
 
-      - name: 🏃 Run Lighthouse on pages
+      - name: Run Lighthouse on pages
         id: lh
         shell: bash
         run: |
           mkdir -p lhci reports
           i=0
-          # Run LHCI for each target URL and collect a tiny summary row
           for URL in ${TARGET_URLS}; do
             i=$((i+1))
             OUTDIR="lhci/run_${i}"
@@ -73,34 +65,26 @@ jobs:
               --collect.numberOfRuns=1 \
               --upload.target=filesystem \
               --upload.outputDir="$OUTDIR"
-
-            # Find report JSON
             FILE=$(ls -1 "$OUTDIR"/*report.json 2>/dev/null | head -n1 || true)
             if [ -z "$FILE" ]; then FILE=$(ls -1 "$OUTDIR"/*.json | head -n1); fi
-
             PERF=$(jq -r 'if has("summary") then .summary.categories.performance else .categories.performance.score end' "$FILE")
             ACCESS=$(jq -r 'if has("summary") then .summary.categories.accessibility else .categories.accessibility.score end' "$FILE")
             SEO=$(jq -r 'if has("summary") then .summary.categories.seo else .categories.seo.score end' "$FILE")
             BP=$(jq -r 'if has("summary") then .summary.categories["best-practices"] else .categories["best-practices"].score end' "$FILE")
-
             jq -n --arg url "$URL" \
                  --arg perf "$PERF" --arg access "$ACCESS" --arg seo "$SEO" --arg bp "$BP" \
-                 '{url:$url, performance:($perf|tonumber), accessibility:($access|tonumber), seo:($seo|tonumber), best_practices:($bp|tonumber), report:$ENV.FILE}' \
+                 '{url:$url, performance:($perf|tonumber), accessibility:($access|tonumber), seo:($seo|tonumber), best_practices:($bp|tonumber)}' \
               > "reports/lh_${i}.json"
           done
-          # Merge page summaries into one JSON array
           jq -s '.' reports/lh_*.json > reports/lh_summary.json
-
-          # For step outputs, compute worst (min) per category across pages
           PERF_MIN_PAGE=$(jq '[.[].performance]|min' reports/lh_summary.json)
           ACCESS_MIN_PAGE=$(jq '[.[].accessibility]|min' reports/lh_summary.json)
           SEO_MIN_PAGE=$(jq '[.[].seo]|min' reports/lh_summary.json)
           BP_MIN_PAGE=$(jq '[.[].best_practices]|min' reports/lh_summary.json)
-          echo "perf=${PERF_MIN_PAGE}"   >> "$GITHUB_OUTPUT"
+          echo "perf=${PERF_MIN_PAGE}"     >> "$GITHUB_OUTPUT"
           echo "access=${ACCESS_MIN_PAGE}" >> "$GITHUB_OUTPUT"
-          echo "seo=${SEO_MIN_PAGE}"     >> "$GITHUB_OUTPUT"
-          echo "bp=${BP_MIN_PAGE}"       >> "$GITHUB_OUTPUT"
-
+          echo "seo=${SEO_MIN_PAGE}"       >> "$GITHUB_OUTPUT"
+          echo "bp=${BP_MIN_PAGE}"         >> "$GITHUB_OUTPUT"
           {
             echo "### Lighthouse scores (worst per category across pages)"
             echo ""
@@ -120,11 +104,10 @@ jobs:
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 🔗 Link check (same-site only)
+      - name: Link check (same-site only)
         id: links
         shell: bash
         run: |
-          # Crawl the home page only (cascades across same-site due to --recurse)
           linkinator "https://garlicrot.github.io/RusherSearch/" \
             --recurse \
             --format json \
@@ -133,15 +116,12 @@ jobs:
             --skip "${LINKINATOR_SKIP_2}" \
             --skip "${LINKINATOR_SKIP_3}" \
             > linkinator.json || true
-
           BROKEN_COUNT=$(jq '[.links[] | select(.state=="BROKEN")] | length' linkinator.json)
           echo "broken=${BROKEN_COUNT}" >> "$GITHUB_OUTPUT"
-
           jq '[.links[] | select(.state=="BROKEN")]
               | sort_by(.status, .url)
               | .[0:20]
               | map({status, url, parent})' linkinator.json > broken-top.json
-
           {
             echo ""
             echo "### Link check"
@@ -154,7 +134,7 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 🚦 Gate (decide if we open/close an issue)
+      - name: Gate (decide if we open/close an issue)
         id: gate
         shell: bash
         run: |
@@ -165,39 +145,49 @@ jobs:
           awk -v a="${{ steps.lh.outputs.bp }}"     -v b="${BP_MIN}"     'BEGIN{exit(a<b)}' || FAIL=1
           if [ "${{ steps.links.outputs.broken }}" -gt 0 ]; then FAIL=1; fi
           echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
-          echo "dry_run=${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+          # derive DRY_RUN from workflow_dispatch input (string 'true'/'false')
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "dry_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: 📝 Open or update health issue
+      - name: Open or update health issue
         if: ${{ steps.gate.outputs.fail == '1' && steps.gate.outputs.dry_run != 'true' }}
         uses: actions/github-script@v7
+        env:
+          WORST_PERF: ${{ steps.lh.outputs.perf }}
+          WORST_ACCESS: ${{ steps.lh.outputs.access }}
+          WORST_SEO: ${{ steps.lh.outputs.seo }}
+          WORST_BP: ${{ steps.lh.outputs.bp }}
+          BROKEN_COUNT: ${{ steps.links.outputs.broken }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PERF_MIN: ${{ env.PERF_MIN }}
+          ACCESS_MIN: ${{ env.ACCESS_MIN }}
+          SEO_MIN: ${{ env.SEO_MIN }}
+          BP_MIN: ${{ env.BP_MIN }}
         with:
           script: |
             const fs = require('fs');
-            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
             const lhSummary = JSON.parse(fs.readFileSync('reports/lh_summary.json','utf8'));
             const broken = fs.existsSync('broken-top.json') ? JSON.parse(fs.readFileSync('broken-top.json','utf8')) : [];
-
-            // Build per-page table
             const pageTable = [
               '| Page | Perf | A11y | SEO | Best-Prac |',
               '|---|---:|---:|---:|---:|',
               ...lhSummary.map(p => `| ${p.url} | ${p.performance} | ${p.accessibility} | ${p.seo} | ${p.best_practices} |`)
             ].join('\n');
-
             const brokenList = broken.length
               ? broken.map(b => `- ${b.status} — ${b.url}\n  parent: ${b.parent}`).join('\n')
               : '- None';
-
             const badges = [
-              `![Perf](https://img.shields.io/badge/perf-${{ steps.lh.outputs.perf }}-informational)`,
-              `![A11y](https://img.shields.io/badge/a11y-${{ steps.lh.outputs.access }}-informational)`,
-              `![SEO](https://img.shields.io/badge/seo-${{ steps.lh.outputs.seo }}-informational)`,
-              `![Best-Prac](https://img.shields.io/badge/best--practices-${{ steps.lh.outputs.bp }}-informational)`,
-              `![Broken](https://img.shields.io/badge/broken_links-${{ steps.links.outputs.broken }}-critical)`
+              `![Perf](https://img.shields.io/badge/perf-${process.env.WORST_PERF}-informational)`,
+              `![A11y](https://img.shields.io/badge/a11y-${process.env.WORST_ACCESS}-informational)`,
+              `![SEO](https://img.shields.io/badge/seo-${process.env.WORST_SEO}-informational)`,
+              `![Best-Prac](https://img.shields.io/badge/best--practices-${process.env.WORST_BP}-informational)`,
+              `![Broken](https://img.shields.io/badge/broken_links-${process.env.BROKEN_COUNT}-critical)`
             ].join(' ');
-
             const body = [
-              `${badges}`,
+              badges,
               '',
               '**Status:** ❌ Regression detected',
               '',
@@ -208,10 +198,10 @@ jobs:
               `- Best Practices: ${process.env.BP_MIN}`,
               '',
               '### Worst category scores (across pages)',
-              `- Performance: ${{ steps.lh.outputs.perf }}`,
-              `- Accessibility: ${{ steps.lh.outputs.access }}`,
-              `- SEO: ${{ steps.lh.outputs.seo }}`,
-              `- Best Practices: ${{ steps.lh.outputs.bp }}`,
+              `- Performance: ${process.env.WORST_PERF}`,
+              `- Accessibility: ${process.env.WORST_ACCESS}`,
+              `- SEO: ${process.env.WORST_SEO}`,
+              `- Best Practices: ${process.env.WORST_BP}`,
               '',
               '### Per-page scores',
               pageTable,
@@ -220,25 +210,19 @@ jobs:
               brokenList,
               '',
               `<details><summary>Artifacts</summary>
-
-- Lighthouse raw JSON: attached as \`lhci\`
-- Linkinator raw JSON: \`linkinator.json\`
-- Summary JSON: \`reports/lh_summary.json\`
-
+- Lighthouse raw JSON: attached as lhci
+- Linkinator raw JSON: linkinator.json
+- Summary JSON: reports/lh_summary.json
 </details>`,
               '',
-              `**Workflow run:** ${runUrl}`
+              `**Workflow run:** ${process.env.RUN_URL}`
             ].join('\n');
-
-            // Ensure a single rolling "Site health" issue
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
               state: 'open', labels: 'health'
             });
-
             const title = 'Site health regression detected';
             const existing = issues.find(i => i.title === title);
-
             if (existing) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner, repo: context.repo.repo,
@@ -251,7 +235,7 @@ jobs:
               });
             }
 
-      - name: ✅ Close health issue on recovery
+      - name: Close health issue on recovery
         if: ${{ steps.gate.outputs.fail == '0' && steps.gate.outputs.dry_run != 'true' }}
         uses: actions/github-script@v7
         with:
@@ -273,7 +257,7 @@ jobs:
               });
             }
 
-      - name: 📎 Upload artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: site-health-reports
