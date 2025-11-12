@@ -6,9 +6,9 @@ on:
       dry_run:
         description: "Do everything except open/close issues"
         required: false
-        default: "false"    # "true" | "false"
+        default: "false"    # string "true"/"false"
   schedule:
-    - cron: "17 9 * * *"   # daily 09:17 UTC
+    - cron: "17 9 * * *"  # daily 09:17 UTC
 
 permissions:
   contents: read
@@ -36,28 +36,20 @@ env:
 jobs:
   health:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node (with npm cache)
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
 
-      - name: Create minimal LHCI config (silence warning)
+      - name: Install tooling
         run: |
-          cat > .lighthouserc.json <<'JSON'
-          {
-            "ci": {
-              "collect": { "numberOfRuns": 1 },
-              "upload":  { "target": "filesystem", "outputDir": "lhci/tmp" }
-            }
-          }
-          JSON
+          npm i -g @lhci/cli@0.14.x linkinator@6
+          sudo apt-get update -y
+          sudo apt-get install -y jq
 
       - name: Run Lighthouse on pages
         id: lh
@@ -68,11 +60,10 @@ jobs:
           for URL in ${TARGET_URLS}; do
             i=$((i+1))
             OUTDIR="lhci/run_${i}"
-
-            # Use npx so we don't install globals; pinned major versions
-            npx --yes @lhci/cli@0.14.x autorun \
-              --config=.lighthouserc.json \
+            lhci autorun \
               --collect.url="$URL" \
+              --collect.numberOfRuns=1 \
+              --upload.target=filesystem \
               --upload.outputDir="$OUTDIR"
 
             FILE=$(ls -1 "$OUTDIR"/*report.json 2>/dev/null | head -n1 || true)
@@ -124,7 +115,7 @@ jobs:
         id: links
         shell: bash
         run: |
-          npx --yes linkinator@6 "https://garlicrot.github.io/RusherSearch/" \
+          linkinator "https://garlicrot.github.io/RusherSearch/" \
             --recurse \
             --format json \
             --timeout "${LINKINATOR_TIMEOUT_MS}" \
@@ -157,13 +148,11 @@ jobs:
         id: gate
         shell: bash
         run: |
-          # Expand env thresholds to local numeric vars (for clearer logs)
-          T_PERF=${PERF_MIN}; T_ACC=${ACCESS_MIN}; T_SEO=${SEO_MIN}; T_BP=${BP_MIN}
           FAIL=0
-          awk -v a="${{ steps.lh.outputs.perf }}"   -v b="$T_PERF" 'BEGIN{exit(a<b)}' || FAIL=1
-          awk -v a="${{ steps.lh.outputs.access }}" -v b="$T_ACC"  'BEGIN{exit(a<b)}' || FAIL=1
-          awk -v a="${{ steps.lh.outputs.seo }}"    -v b="$T_SEO"  'BEGIN{exit(a<b)}' || FAIL=1
-          awk -v a="${{ steps.lh.outputs.bp }}"     -v b="$T_BP"   'BEGIN{exit(a<b)}' || FAIL=1
+          awk -v a="${{ steps.lh.outputs.perf }}"   -v b="${PERF_MIN}"   'BEGIN{exit(a<b)}' || FAIL=1
+          awk -v a="${{ steps.lh.outputs.access }}" -v b="${ACCESS_MIN}" 'BEGIN{exit(a<b)}' || FAIL=1
+          awk -v a="${{ steps.lh.outputs.seo }}"    -v b="${SEO_MIN}"    'BEGIN{exit(a<b)}' || FAIL=1
+          awk -v a="${{ steps.lh.outputs.bp }}"     -v b="${BP_MIN}"     'BEGIN{exit(a<b)}' || FAIL=1
           if [ "${{ steps.links.outputs.broken }}" -gt 0 ]; then FAIL=1; fi
           echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
 
@@ -191,8 +180,11 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+
             const lhSummary = JSON.parse(fs.readFileSync('reports/lh_summary.json','utf8'));
-            const broken = fs.existsSync('broken-top.json') ? JSON.parse(fs.readFileSync('broken-top.json','utf8')) : [];
+            const broken = fs.existsSync('broken-top.json')
+              ? JSON.parse(fs.readFileSync('broken-top.json','utf8'))
+              : [];
 
             const pageTable = [
               '| Page | Perf | A11y | SEO | Best-Prac |',
@@ -245,20 +237,29 @@ jobs:
             ].join('\n');
 
             const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', labels: 'health'
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'health'
             });
+
             const title = 'Site health regression detected';
             const existing = issues.find(i => i.title === title);
+
             if (existing) {
               await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: existing.number, body
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body
               });
             } else {
               await github.rest.issues.create({
-                owner: context.repo.owner, repo: context.repo.repo,
-                title, body, labels: ['health']
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['health']
               });
             }
 
@@ -269,19 +270,24 @@ jobs:
           script: |
             const when = new Date().toISOString();
             const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', labels: 'health'
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'health'
             });
             const existing = issues.find(i => i.title === 'Site health regression detected');
             if (existing) {
               await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
                 issue_number: existing.number,
                 body: '**Status:** ✅ All checks passing on ' + when + '.\n\nClosing.'
               });
               await github.rest.issues.update({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: existing.number, state: 'closed'
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                state: 'closed'
               });
             }
 
@@ -289,7 +295,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: site-health-reports
-          retention-days: 7
           path: |
             lhci
             reports/lh_summary.json
