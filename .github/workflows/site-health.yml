@@ -5,8 +5,8 @@ on:
     inputs:
       dry_run:
         description: "Do everything except open/close issues"
-        type: boolean
-        default: false
+        required: false
+        default: "false"      # string "true"/"false"
   schedule:
     - cron: "17 9 * * *"  # daily 09:17 UTC
 
@@ -161,7 +161,7 @@ jobs:
           WORST_SEO: ${{ steps.lh.outputs.seo }}
           WORST_BP: ${{ steps.lh.outputs.bp }}
           BROKEN_COUNT: ${{ steps.links.outputs.broken }}
-          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_URL: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           PERF_MIN: ${{ env.PERF_MIN }}
           ACCESS_MIN: ${{ env.ACCESS_MIN }}
           SEO_MIN: ${{ env.SEO_MIN }}
