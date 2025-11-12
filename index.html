@@ -1,23 +1,34 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>RusherSearch – RusherHack Plugin Search</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="canonical" href="https://garlicrot.github.io/RusherSearch/" />
 
   <base href="https://garlicrot.github.io/RusherSearch/">
 
-  <meta name="description" content="Search for RusherHack plugins and themes using the public API.">
-  <meta property="og:title" content="RusherSearch – RusherHack Plugin/Theme Search">
-  <meta property="og:description" content="Instant, filterable search for RusherHack plugins and themes.">
-  <meta property="og:type" content="website">
-  <meta property="og:url" content="https://garlicrot.github.io/RusherSearch">
-  <meta property="og:image" content="https://raw.githubusercontent.com/RusherDevelopment/rusherhack-plugins/refs/heads/main/Assets/RusherHacks/rh_head.png">
-  <meta name="twitter:card" content="summary_large_image">
+  <!-- SEO / Social -->
+  <meta name="description" content="Search for RusherHack plugins and themes using the public API." />
+  <meta property="og:title" content="RusherSearch – RusherHack Plugin/Theme Search" />
+  <meta property="og:description" content="Instant, filterable search for RusherHack plugins and themes." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://garlicrot.github.io/RusherSearch" />
+  <meta property="og:image" content="https://raw.githubusercontent.com/RusherDevelopment/rusherhack-plugins/refs/heads/main/Assets/RusherHacks/rh_head.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#0a0b10" />
 
-  <link rel="preconnect" href="https://rusherdevelopment.github.io">
-  <link rel="icon" href="https://raw.githubusercontent.com/RusherDevelopment/rusherhack-plugins/refs/heads/main/Assets/RusherHacks/rh_head.png">
-  <link rel="stylesheet" href="./style.css">
+  <!-- Networking hints (perf) -->
+  <link rel="preconnect" href="https://rusherdevelopment.github.io" crossorigin />
+  <link rel="dns-prefetch" href="//rusherdevelopment.github.io" />
+  <link rel="preconnect" href="https://avatars.githubusercontent.com" crossorigin />
+  <link rel="dns-prefetch" href="//avatars.githubusercontent.com" />
+  <link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin />
+  <link rel="dns-prefetch" href="//raw.githubusercontent.com" />
+
+  <link rel="icon" href="https://raw.githubusercontent.com/RusherDevelopment/rusherhack-plugins/refs/heads/main/Assets/RusherHacks/rh_head.png" sizes="any" />
+  <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
   <header class="wrap">
@@ -26,7 +37,8 @@
         class="brand-icon"
         src="https://raw.githubusercontent.com/RusherDevelopment/rusherhack-plugins/refs/heads/main/Assets/RusherHacks/rh_head.png"
         alt=""
-        width="36" height="36" loading="eager" decoding="async" aria-hidden="true"
+        width="36" height="36"
+        loading="eager" decoding="async" fetchpriority="low" aria-hidden="true"
       />
       <span>RusherHack Plugin Search</span>
     </h1>
@@ -35,12 +47,13 @@
 
     <div class="controls">
       <div class="search-wrap">
-        <input id="search" type="search" placeholder="Search by name, creator, or tag…" autocomplete="off" aria-label="Search plugins">
+        <label for="search" class="sr-only">Search plugins</label>
+        <input id="search" type="search" placeholder="Search by name, creator, or tag…" autocomplete="off" aria-controls="results" />
         <ul id="suggest" class="suggest" role="listbox" aria-label="Search suggestions"></ul>
       </div>
 
       <form id="filters" class="filters" role="region" aria-label="Filters" onsubmit="return false;">
-        <label class="filter-item">Type
+        <label class="filter-item" for="f-type">Type
           <select id="f-type" aria-label="Filter by type">
             <option value="">All</option>
             <option value="plugin">Plugins</option>
@@ -48,7 +61,7 @@
           </select>
         </label>
 
-        <label class="filter-item">Class
+        <label class="filter-item" for="f-core">Class
           <select id="f-core" aria-label="Filter by class">
             <option value="">All</option>
             <option value="regular">Regular</option>
@@ -56,8 +69,8 @@
           </select>
         </label>
 
-        <label class="filter-item">MC Version
-          <input id="f-mc" list="mc-versions" placeholder="e.g. 1.21.4" aria-label="Filter by Minecraft version">
+        <label class="filter-item" for="f-mc">MC Version
+          <input id="f-mc" list="mc-versions" placeholder="e.g. 1.21.4" aria-label="Filter by Minecraft version" />
           <datalist id="mc-versions"></datalist>
         </label>
 
@@ -69,13 +82,14 @@
   </header>
 
   <main class="wrap">
-    <ul id="results" class="grid" aria-live="polite" aria-busy="true"></ul>
-    <div id="empty" class="empty" role="alert">Start typing to search the catalog…</div>
+    <h2 id="results-heading" class="sr-only">Search Results</h2>
+    <ul id="results" class="grid" aria-labelledby="results-heading" aria-live="polite" aria-busy="true"></ul>
+    <div id="empty" class="empty" role="status">Start typing to search the catalog…</div>
   </main>
 
   <footer class="wrap foot">
     <small>Powered by the
-      <a class="foot-link" href="https://rusherdevelopment.github.io/rusherhack-plugins/api/v1/" target="_blank" rel="noopener">
+      <a class="foot-link" href="https://rusherdevelopment.github.io/rusherhack-plugins/api/v1/" target="_blank" rel="noopener noreferrer">
         RusherHack Plugin/Theme API
       </a>
     </small>
