@@ -19,25 +19,30 @@
   <meta name="color-scheme" content="dark light" />
   <meta name="theme-color" content="#0a0b10" />
 
-  <!-- Networking hints (perf) -->
-  <link rel="preconnect" href="https://rusherdevelopment.github.io" crossorigin />
-  <link rel="dns-prefetch" href="//rusherdevelopment.github.io" />
-  <link rel="preconnect" href="https://avatars.githubusercontent.com" crossorigin />
-  <link rel="dns-prefetch" href="//avatars.githubusercontent.com" />
-  <link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin />
-  <link rel="dns-prefetch" href="//raw.githubusercontent.com" />
+  <!-- Networking hints (reduce TTFB for static JSON + avatars) -->
+  <link rel="preconnect" href="https://rusherdevelopment.github.io" crossorigin>
+  <link rel="dns-prefetch" href="//rusherdevelopment.github.io">
+  <link rel="preconnect" href="https://avatars.githubusercontent.com" crossorigin>
+  <link rel="dns-prefetch" href="//avatars.githubusercontent.com">
+  <link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin>
+  <link rel="dns-prefetch" href="//raw.githubusercontent.com">
 
+  <!-- Small PNG works fine as favicon; keep it cached by URL -->
   <link rel="icon" href="https://raw.githubusercontent.com/RusherDevelopment/rusherhack-plugins/refs/heads/main/Assets/RusherHacks/rh_head.png" sizes="any" />
+
+  <!-- Preload script to shave JS startup; CSS loads normally for render blocking -->
+  <link rel="preload" href="./script.js" as="script" />
+
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
   <header class="wrap">
     <h1 class="brand">
+      <!-- Decorative: aria-hidden -->
       <img
         class="brand-icon"
         src="https://raw.githubusercontent.com/RusherDevelopment/rusherhack-plugins/refs/heads/main/Assets/RusherHacks/rh_head.png"
-        alt=""
-        width="36" height="36"
+        alt="" width="36" height="36"
         loading="eager" decoding="async" fetchpriority="low" aria-hidden="true"
       />
       <span>RusherHack Plugin Search</span>
@@ -48,7 +53,17 @@
     <div class="controls">
       <div class="search-wrap">
         <label for="search" class="sr-only">Search plugins</label>
-        <input id="search" type="search" placeholder="Search by name, creator, or tag…" autocomplete="off" aria-controls="results" />
+        <input
+          id="search"
+          type="search"
+          placeholder="Search by name, creator, or tag…"
+          inputmode="search"
+          autocomplete="off"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          aria-controls="results"
+        />
         <ul id="suggest" class="suggest" role="listbox" aria-label="Search suggestions"></ul>
       </div>
 
@@ -81,13 +96,13 @@
     </div>
   </header>
 
-  <main class="wrap">
+  <main class="wrap" role="main">
     <h2 id="results-heading" class="sr-only">Search Results</h2>
     <ul id="results" class="grid" aria-labelledby="results-heading" aria-live="polite" aria-busy="true"></ul>
     <div id="empty" class="empty" role="status">Start typing to search the catalog…</div>
   </main>
 
-  <footer class="wrap foot">
+  <footer class="wrap foot" role="contentinfo">
     <small>Powered by the
       <a class="foot-link" href="https://rusherdevelopment.github.io/rusherhack-plugins/api/v1/" target="_blank" rel="noopener noreferrer">
         RusherHack Plugin/Theme API
@@ -96,5 +111,8 @@
   </footer>
 
   <script src="./script.js" defer></script>
+  <noscript>
+    <div class="wrap empty">This site needs JavaScript enabled to search the catalog.</div>
+  </noscript>
 </body>
 </html>
