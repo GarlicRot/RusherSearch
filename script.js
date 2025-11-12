@@ -32,11 +32,14 @@ const SUGGEST_BY_NAME = new Map();
 let INDEXED = [];        // [{item, hay, nameLC}]
 let LAST_RESULTS = [];   // current filtered+ranked items for virtualization
 
-// virtualization
-const PAGE = 40;
+// virtualization (slightly smaller page for smoother inserts)
+const PAGE = 36;
 let pagePointer = 0;
 let sentinel;
 let io;
+
+// delayed full-index warm flag
+let INDEX_WARMED = false;
 
 const debounce = (fn, ms = 150) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms);} };
 const escapeHTML = (s) => String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
@@ -44,6 +47,7 @@ const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
 const tokenize = (q) => (q||"").toLowerCase().trim().split(/\s+/).filter(Boolean);
 const first = (arr) => (Array.isArray(arr)&&arr.length?arr[0]:"");
 
+// highlight helper (kept for future use)
 const markText = (txt, tokens) => {
   if (!txt || !tokens.length) return escapeHTML(txt||"");
   let out = escapeHTML(txt);
@@ -142,6 +146,7 @@ const fetchJSON = async (url, key, ttlMs=12*60*60*1000) => {
   return json;
 };
 
+// ---------- lightweight loads first ----------
 const loadVersions = async () => {
   try {
     const list = await fetchJSON(VERS_URL, "versions");
@@ -151,26 +156,27 @@ const loadVersions = async () => {
   } catch {}
 };
 
-const loadData = async () => {
+const loadSuggest = async () => {
   els.status.textContent = "Loading…";
   try {
     const compact = await fetchJSON(SEARCH_URL, "search-index");
     if (Array.isArray(compact)) SUGGEST_SRC = compact.map(normalizeSearchEntry);
+    els.status.textContent = `Ready (${SUGGEST_SRC.length} suggestions)`;
   } catch (e) {
     console.warn("[RusherSearch] search-index:", e);
+    els.status.textContent = "Ready";
   }
+};
 
+// ---------- deferred heavy load ----------
+const loadIndex = async () => {
+  if (INDEX_WARMED) return;
+  INDEX_WARMED = true;
   try {
     const full = await fetchJSON(INDEX_URL, "index");
     DATA = (Array.isArray(full)?full:Object.values(full).filter(Array.isArray).flat()).map(normalizeFullItem);
 
-    if (!SUGGEST_SRC.length) {
-      SUGGEST_SRC = DATA.map(d=>({ id:d.id, name:d.name, creator:d.creator||first(d.authors)||"", tags:d.tags||[], versions:d.mc||[] }));
-      SUGGEST_BY_ID.clear(); SUGGEST_BY_NAME.clear();
-      SUGGEST_SRC.forEach(rec => { if (rec.id) SUGGEST_BY_ID.set(rec.id.toLowerCase(),rec); SUGGEST_BY_NAME.set(rec.name.toLowerCase(),rec); });
-    }
-
-    // preindex haystack
+    // build preindexed haystack
     INDEXED = DATA.map(item => ({
       item,
       nameLC: (item.name||"").toLowerCase(),
@@ -182,13 +188,29 @@ const loadData = async () => {
       ].join(" ").toLowerCase()
     }));
 
-    els.status.textContent = `Loaded ${DATA.length || SUGGEST_SRC.length} items`;
+    // fall back: if suggestions missing, synthesize from DATA
+    if (!SUGGEST_SRC.length) {
+      SUGGEST_SRC = DATA.map(d=>({ id:d.id, name:d.name, creator:d.creator||first(d.authors)||"", tags:d.tags||[], versions:d.mc||[] }));
+      SUGGEST_BY_ID.clear(); SUGGEST_BY_NAME.clear();
+      SUGGEST_SRC.forEach(rec => { if (rec.id) SUGGEST_BY_ID.set(rec.id.toLowerCase(),rec); SUGGEST_BY_NAME.set(rec.name.toLowerCase(),rec); });
+    }
+
+    els.status.textContent = `Loaded ${DATA.length} items`;
+    // re-run search now that full index exists
+    runSearch();
   } catch (e) {
     console.error("[RusherSearch] index:", e);
-    els.status.textContent = "Failed to load API data.";
   }
 };
 
+// warm when idle or on interaction
+const warmIndexSoon = () => {
+  if (INDEX_WARMED) return;
+  const idle = window.requestIdleCallback || ((cb)=>setTimeout(cb, 1500));
+  idle(() => loadIndex());
+};
+
+// ---------- filters & ranking ----------
 function hydrateControlsFromURL() {
   const q = params.get("q")||"", type=params.get("type")||"", core=params.get("core")||"", mc=params.get("mc")||"";
   if (els.search) els.search.value=q;
@@ -242,7 +264,9 @@ const avatarBlock = (imgUrl, fallbackText, ownerLike) => {
   const initials=(fallbackText||"??").slice(0,2).toUpperCase();
   const {src,srcset}=buildAvatarSources(imgUrl, ownerLike);
   if (!src) return `<div class="avatar fallback">${escapeHTML(initials)}</div>`;
-  return `<img class="avatar" loading="lazy" src="${src}" srcset="${srcset}" sizes="64px"
+  // add async decode + low priority for non-critical content
+  return `<img class="avatar" loading="lazy" decoding="async" fetchpriority="low"
+    src="${src}" srcset="${srcset}" sizes="64px"
     alt="${escapeHTML(fallbackText||"creator")}"
     onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'avatar fallback',textContent:'${escapeHTML(initials)}'}))">`;
 };
@@ -329,7 +353,7 @@ const runSearch = () => {
   const source = INDEXED.length
     ? INDEXED
     : (SUGGEST_SRC.map(s=>({
-        item:{ id:s.id,name:s.name,description:"",authors:s.creator?[s.creator]:[],creator:s.creator||"",tags:s.tags||[],mc:s.versions||[],repo:"",homepage:"",jar:"",kind:"",class:"",version:"",updated:"",owner:s.creator||null },
+        item:{ id:s.id,name:s.name,description:"",authors: s.creator?[s.creator]:[],creator:s.creator||"",tags:s.tags||[],mc:s.versions||[],repo:"",homepage:"",jar:"",kind:"",class:"",version:"",updated:"",owner:s.creator||null },
         nameLC:(s.name||"").toLowerCase(),
         hay:[s.name,s.creator,(s.tags||[]).join(" ")].join(" ").toLowerCase()
       })));
@@ -355,13 +379,15 @@ const runSearch = () => {
     rankedItems = filteredIdx.map(x=>x.item);
   }
 
-  render(rankedItems.slice(0, 1000), tokens); // hard cap to prevent runaway DOM
+  // hard cap to keep DOM light; sentinel will stream more if present
+  render(rankedItems.slice(0, 600), tokens);
 };
 
+// ---------- suggestions (require ≥2 chars to cut work) ----------
 let SUGGEST_INDEX_ACTIVE = -1;
 const buildSuggestions = (q) => {
   const term=(q||"").toLowerCase();
-  if (!term || !SUGGEST_SRC.length) {
+  if (!term || term.length < 2 || !SUGGEST_SRC.length) {
     els.suggest?.classList.remove("show");
     if (els.suggest) els.suggest.innerHTML="";
     SUGGEST_INDEX_ACTIVE=-1; return;
@@ -390,13 +416,22 @@ const commitSuggestion = (idx) => {
   runSearch();
 };
 
+// ---------- init ----------
 const init = async () => {
   hydrateControlsFromURL();
   els.results.setAttribute("aria-busy","true");
-  await Promise.all([loadVersions(), loadData()]);
+
+  // only light stuff on boot
+  await Promise.all([loadVersions(), loadSuggest()]);
+
   els.results.setAttribute("aria-busy","false");
   buildSuggestions(els.search.value);
   runSearch();
+
+  // warm the heavy index when user shows intent OR when idle
+  els.search.addEventListener("focus", warmIndexSoon, { passive: true });
+  els.search.addEventListener("input", warmIndexSoon, { passive: true });
+  window.addEventListener("load", () => setTimeout(warmIndexSoon, 3000), { once:true });
 };
 
 const debouncedSearch = debounce(()=>{ buildSuggestions(els.search.value); runSearch(); }, 120);
